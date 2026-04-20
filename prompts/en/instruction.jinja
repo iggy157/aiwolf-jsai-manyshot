@@ -1,0 +1,25 @@
+{#-
+  instruction.jinja (English)
+  Minimal per-request instruction line. Assumes the performer draws on the
+  reference scripts to act naturally in character.
+  Expects: request_key, info (optional)
+-#}
+{% if request_key == 'talk' -%}
+Day {{ info.day }} talk. Draw on the discussion flow and utterance tempo of the reference scripts, and speak naturally as your character. Do not imitate the format — output your utterance content only.
+{% elif request_key == 'whisper' -%}
+Day {{ info.day }} whisper. Reply to your fellow werewolf naturally, staying in character.
+{% elif request_key == 'divine' -%}
+Divine request. Output only the name of the agent to divine.
+{% elif request_key == 'guard' -%}
+Guard request. Output only the name of the agent to guard.
+{% elif request_key == 'vote' -%}
+Vote request. Output only the name of the agent to vote for.
+{% elif request_key == 'attack' -%}
+Attack request. Output only the name of the agent to attack.
+{% elif request_key == 'initialize' -%}
+Game initialize. Using the reference scripts you studied and the role/profile that follows, respond in English to subsequent requests.
+{% elif request_key == 'daily_initialize' -%}
+Day {{ info.day }} has started.
+{% elif request_key == 'daily_finish' -%}
+Day {{ info.day }} has ended.
+{% endif -%}

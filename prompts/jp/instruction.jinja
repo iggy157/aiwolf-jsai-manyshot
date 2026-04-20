@@ -1,0 +1,24 @@
+{#-
+  instruction.jinja
+  リクエスト種別ごとの最低限の指示文. 出演者が台本を参考に自然に演じることを前提とする.
+  Expects: request_key, info (optional)
+-#}
+{% if request_key == 'talk' -%}
+{{ info.day }}日目のトークです。お手本台本の議論運びや発言のテンポを参考に, あなたのキャラクターとして自然に発言してください。形式の模倣は不要です (発言内容のみを書くこと)。
+{% elif request_key == 'whisper' -%}
+{{ info.day }}日目の囁きです。人狼仲間への囁きを, あなたのキャラクターの口調で自然に返してください。
+{% elif request_key == 'divine' -%}
+占いリクエストです。占い対象のエージェント名のみを出力してください。
+{% elif request_key == 'guard' -%}
+護衛リクエストです。護衛対象のエージェント名のみを出力してください。
+{% elif request_key == 'vote' -%}
+投票リクエストです。追放投票の対象エージェント名のみを出力してください。
+{% elif request_key == 'attack' -%}
+襲撃リクエストです。襲撃対象のエージェント名のみを出力してください。
+{% elif request_key == 'initialize' -%}
+ゲーム開始です。先に読んだお手本台本と, 次に与えられるあなたの役・プロフィールを踏まえ, 以後のリクエストに日本語で応答してください。
+{% elif request_key == 'daily_initialize' -%}
+{{ info.day }}日目が始まりました。
+{% elif request_key == 'daily_finish' -%}
+{{ info.day }}日目が終了しました。
+{% endif -%}

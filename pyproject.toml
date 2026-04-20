@@ -1,0 +1,54 @@
+[project]
+name = "aiwolf-nlp-agent-llm"
+version = "0.3.6"
+dependencies = [
+    "aiwolf-nlp-common==0.7.0",
+    "python-ulid>=3.0.0",
+    "pyyaml>=6.0.2",
+    "jinja2>=3.1.6",
+    "langchain-google-genai>=2.1.0",
+    "langchain-openai>=0.3.9",
+    "langchain-ollama>=0.3.0",
+    "langchain-anthropic>=1.3.0",
+    "python-dotenv>=1.1.0",
+]
+requires-python = ">=3.11"
+authors = [
+    { name = "aiwolfdial", email = "aiwolf@kanolab.net" },
+    { name = "nwatanabe", email = "nwatanabe@kanolab.net" },
+    { name = "ysahashi", email = "ysahashi@kanolab.net" },
+]
+maintainers = [
+    { name = "aiwolfdial", email = "aiwolf@kanolab.net" },
+    { name = "nwatanabe", email = "nwatanabe@kanolab.net" },
+    { name = "ysahashi", email = "ysahashi@kanolab.net" },
+]
+description = "aiwolf-nlp-agent-llm"
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["aiwolf"]
+
+[project.urls]
+Homepage = "https://aiwolfdial.github.io/aiwolf-nlp/"
+
+[dependency-groups]
+dev = ["pyright>=1.1.402", "ruff>=0.12.1"]
+lint = ["ruff>=0.12.1"]
+
+[tool.pyright]
+include = ["src"]
+exclude = ["**/__pycache__"]
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+typeCheckingMode = "strict"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+unfixable = ["F401", "F841"]
+pydocstyle.convention = "google"

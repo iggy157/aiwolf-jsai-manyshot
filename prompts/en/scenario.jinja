@@ -1,0 +1,67 @@
+{#-
+  scenario.jinja (English)
+  HumanMessage body that feeds sample-game scripts to the LLM at initialization.
+  Expects:
+    scenario_bodies (list[str])
+    scenario_count (int)
+    ack_mode ('llm_summary' | 'static')
+    target_role ('talk' | 'action' | 'default')
+      When separate_langchain=true, talk and action histories each ask for
+      different observation points. When separate_langchain=false, 'default'
+      is passed and a combined summary is requested.
+-#}
+The following are "reference scripts" for this Werewolf game. You will read {{ scenario_count }} real play-log(s) as prior study.
+
+In this system, you play one of several performers who "act out" a Werewolf game. These scripts exist so you can internalize the flow of discussion, the pacing of utterances, the rhythm of topic transitions, and the consistency of each character's tone.
+
+--- Scripts begin ---
+
+{% for body in scenario_bodies %}
+{{ body }}
+
+---
+
+{% endfor %}
+--- Scripts end ---
+
+IMPORTANT (must observe):
+
+- **Do not imitate the format or markup** of the scripts. The following are all handled by the server and must NEVER appear in your output:
+  - `@name` mentions (the server may add these)
+  - Control markers such as `Over` / `Skip`
+  - Markdown headings / tables such as `### Turn 0` or `| ID | Name | Role |`
+  - Meta labels such as "Day N" or "Night actions"
+- What you should learn is **content, not format**:
+  - Discussion flow patterns (CO → questions → narrowing down → vote)
+  - Natural turn-taking between utterance and reply (how a given prompt is answered)
+  - The rhythm of topic shifts and the use of silence
+  - Consistency of each character's tone, first-person pronoun, and speech quirks
+- Scripts are references only. Do not regurgitate lines verbatim; **behave naturally** for the situation at hand.
+- Your actual role and profile for the real game will be given in the next message. You play a different person from any character in the scripts.
+
+{% if ack_mode == 'llm_summary' -%}
+Having read the above, give a **concise** reply (roughly 300–500 characters / ~100 words) summarizing your observations. Bullet points are fine.
+{% if target_role == 'action' -%}
+You will be responsible only for **action decisions** (vote, divine, guard, attack). Extract "given such-and-such history, do this" patterns from the scripts along these axes:
+- **Choosing a divine target**: typical day-1 priorities, selection based on utterance volume or suspicious behavior, alignment with the medium's results
+- **Choosing a vote target**: how to align with a seer's black judgment, how counter-COs shape the decision, how to behave when you're the one under suspicion
+- **Choosing a guard target**: when to protect a true seer/medium vs. a grey target, reading the prior night's attack and vote patterns
+- **Choosing an attack target**: whether to bite a CO'd role, whether to cut down a vocal villager, reasoning about the bodyguard's likely choice
+- Across all four: anchor each pattern to a specific **history → decision** link, not generic advice.
+{% elif target_role == 'talk' -%}
+You will be responsible only for **utterances (talk) and whispers**. Summarize along these axes:
+- Common discussion-flow patterns (e.g. CO → questions → narrowing → vote)
+- Natural turn-taking rhythms (how a prompt is typically answered)
+- Timing of topic shifts, uses of silence or brief back-channels
+- How each character keeps their tone, first-person pronoun, and speech quirks consistent
+{% else -%}
+You will be responsible for talk, whisper, AND action decisions (vote/divine/guard/attack). Summarize along these axes:
+- Discussion flow patterns (CO → questions → narrowing → vote)
+- Natural utterance rhythms, topic transitions, character-voice consistency
+- History → action links ("given this flow, here is how to vote/divine/guard/attack")
+{% endif -%}
+
+This summary is for your own notes; you do not need to quote script lines verbatim.
+{% else -%}
+Once you have finished reading, reply briefly with "Acknowledged."
+{% endif -%}

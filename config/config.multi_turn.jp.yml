@@ -1,0 +1,150 @@
+# Multi-turn モード用の子設定ファイル.
+# LLMプロバイダ・モデル・プロンプト定義を含む.
+# メインconfigの mode が multi_turn のときに読み込まれる.
+
+# お手本台本 (サンプル対局) の読み込み設定. multi-turn 専用.
+# 有効にすると, Agent.initialize() の最初で data/sample_games_md/ 以下の
+# Markdown 台本を読み込み, LLM に "事前学習" として与えてから INITIALIZE
+# プロンプトを送信する. 台本は HumanMessage, 応答は AIMessage として
+# llm_message_history に積まれ, 以降の全リクエストでコンテキストとして保持される.
+#
+# separate_langchain: true のときは talk / action 両系統の履歴に同じ台本を積む.
+#
+# ack_mode:
+#   llm_summary (既定)
+#     LLM に「議論展開・発話のテンポ・話題転換・キャラクター口調の一貫性」を
+#     300〜500字で要約させる. chain-of-thought的に学習観点を言語化させるので
+#     後段の発話品質が上がりやすい反面, 1エージェントあたり追加で数千トークンの
+#     生成コストが発生する.
+#   static
+#     固定の承諾文 (ack_static_text) を AIMessage として積む. API呼び出しなし.
+#     コスト最小・学習効果は llm_summary より弱い可能性あり.
+#
+# 注意:
+#   台本の量はプロバイダの prompt cache を効かせないと毎ターンの入力コストが
+#   膨張する. Anthropic / Gemini の長文キャッシュが使える構成を推奨.
+scenario:
+  enabled: true
+  sample_dir: ./data/sample_games_md
+  # 006〜015 に絞る (glob の [06-15] は文字クラス扱いで範囲指定にならないので範囲ごとに分解)
+  glob:
+    - sample_9_00[6-9].md   # 006-009
+    - sample_9_01[0-5].md   # 010-015
+  ack_mode: llm_summary
+  ack_static_text: "承知しました。台本を参考に、議論展開・発話のテンポ・キャラクターの口調を踏まえて演じます。"
+  # --- キャッシュ設定 (ack_mode=llm_summary のとき有効) ---
+  # 事前に `uv run scripts/prewarm_scenario.py` で要約を生成しキャッシュする.
+  # ゲーム起動時はキャッシュを読むだけ (LLM 呼び出しゼロ → INITIALIZE タイムアウト回避).
+  use_cache: true
+  cache_dir: ./data/scenario_cache
+  # キャッシュミス時: static=静的ackフォールバック (推奨) / live=実行時に呼び直す / error=失敗扱い
+  on_cache_miss: static
+
+llm:
+  type: openai
+  # llm 直下でも model / temperature / pricing_mode / base_url を書けば
+  # 下のプロバイダセクション (openai:, google: 等) の値を上書きする (任意).
+  # 例: separate_langchain=false のまま google の別モデルを使いたい場合
+  # model: gemini-2.5-pro
+  sleep_time: 0
+  # trueにするとリクエスト種別ごとにLangChainとllm_message_historyを分離する.
+  # 共通系 (initialize, daily_initialize, daily_finish) は両方に送信する.
+  # 発話系 (talk, whisper) は llm.talk のモデルに送信する.
+  # アクション系 (vote, divine, guard, attack) は llm.action のモデルに送信する.
+  # falseにするとllm.typeの単一モデル/履歴で従来通り動作する.
+  separate_langchain: true
+  # talk / action には type の他に model / temperature / pricing_mode / base_url を直接書ける.
+  # 指定した項目は下の <provider>: セクションより優先される. 省略した項目は <provider>: から継承.
+  # 同じ会社の異なるモデルを talk と action で使い分けたい場合はここに model を書く.
+  # type を省略した場合は llm.type をデフォルトとして使う.
+  talk:
+    type: openai
+    model: gpt-4o              # openai + gpt-4o (talk は少し強めのモデル)
+  action:
+    type: openai
+    model: gpt-4o-mini         # openai + gpt-4o-mini (action は軽量モデル)
+
+openai:
+  model: gpt-4o-mini
+  temperature: 0.7
+
+google:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+vertexai:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+ollama:
+  model: llama3.1
+  temperature: 0.7
+  base_url: http://localhost:11434
+
+anthropic:
+  model: claude-opus-4-5-20251101
+  temperature: 1.0
+
+# multi-turn モードでは LLM の会話履歴 (llm_message_history) が LangChain 側で保持されるため,
+# 各リクエストのプロンプトは最低限のワンラインで足りる.
+# ただし llm.separate_langchain=true の場合は talk系 / action系 LangChain が分離され履歴が共有されないため,
+# 共通リクエスト (initialize / daily_initialize / daily_finish) のプロンプトで identity / event ブロックを
+# include し, 両系統に最低限の情報共有を行う.
+prompt:
+  initialize: |-
+    {{ block('identity') }}
+    {{ block('instruction') }}
+    以降のリクエストには日本語で応答してください。レスポンスはそのままゲームに送信されるため, 不要な情報を含めないでください。
+  daily_initialize: |-
+    {{ block('instruction') }}
+    {{ block('event') }}
+  daily_finish: |-
+    {{ block('instruction') }}
+    {{ block('event') }}
+    {% set history_source = talk_history -%}
+    {% set history_start = sent_talk_count -%}
+    {{ block('history') }}
+  talk: |-
+    {% set history_source = talk_history -%}
+    {% set history_start = sent_talk_count -%}
+    {{ block('history') }}
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  whisper: |-
+    {% set history_source = whisper_history -%}
+    {% set history_start = sent_whisper_count -%}
+    {{ block('history') }}
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  divine: |-
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  guard: |-
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  vote: |-
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  attack: |-
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}

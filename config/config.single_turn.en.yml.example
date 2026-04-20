@@ -1,0 +1,147 @@
+# Child configuration file for single-turn mode.
+# Contains LLM provider / model / prompt definitions.
+# Loaded when the main config's `mode` is set to `single_turn`.
+#
+# In single-turn mode, initialize / daily_initialize / daily_finish are NOT sent to the LLM.
+# Their payloads are snapshotted inside the agent (as day_events) and injected into every prompt
+# below via the event.jinja block.
+# Each prompt includes the 5 blocks (identity / event / history / instruction / constraints).
+
+llm:
+  type: google
+  # You may also specify model / temperature / pricing_mode / base_url directly under llm:
+  # to override the matching <provider>: section (optional).
+  # model: gemini-2.5-pro
+  sleep_time: 3
+  separate_langchain: false
+  # llm.talk / llm.action accept model / temperature / pricing_mode / base_url too.
+  # Fields set here override the matching <provider>: section; omitted fields fall back to it.
+  # This lets you use "same provider, different models" (e.g. talk=openai+gpt-4o,
+  # action=openai+gpt-4o-mini). When `type` is omitted, it defaults to llm.type.
+  talk:
+    type: openai
+    model: gpt-4o
+  action:
+    type: openai
+    model: gpt-4o-mini
+
+openai:
+  model: gpt-4o-mini
+  temperature: 0.7
+
+google:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+vertexai:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+ollama:
+  model: llama3.1
+  temperature: 0.7
+  base_url: http://localhost:11434
+
+anthropic:
+  model: claude-opus-4-5-20251101
+  temperature: 1.0
+
+prompt:
+  talk: |-
+    {{ block('identity') }}
+
+    # Daily events
+    {{ block('event') }}
+
+    # Talk history
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  whisper: |-
+    {{ block('identity') }}
+
+    # Daily events
+    {{ block('event') }}
+
+    # Whisper history
+    {% set history_source = whisper_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  divine: |-
+    {{ block('identity') }}
+
+    # Daily events
+    {{ block('event') }}
+
+    # Talk history
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  guard: |-
+    {{ block('identity') }}
+
+    # Daily events
+    {{ block('event') }}
+
+    # Talk history
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  vote: |-
+    {{ block('identity') }}
+
+    # Daily events
+    {{ block('event') }}
+
+    # Talk history
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  attack: |-
+    {{ block('identity') }}
+
+    # Daily events
+    {{ block('event') }}
+
+    # Whisper history
+    {% set history_source = whisper_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}

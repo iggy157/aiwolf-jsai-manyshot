@@ -1,0 +1,39 @@
+{#-
+  identity.jinja (English)
+  Performer-role self-identity. The system has multiple LLMs each playing a distinct
+  character, drawing on the pre-loaded reference scripts to enact a natural Werewolf game.
+  - When local_profile is injected (config.profile.source=local + name match), render the
+    detailed profile from data/prompts/profiles.<lang>.yml in profile_encoding order.
+  - Otherwise fall back to the server-provided info.profile string.
+  - When neither is present, show only name and role.
+  Expects: info, role, local_profile?, profile_encoding?
+-#}
+You are one of the performers in this Werewolf session. Draw on the reference scripts you studied to play your character consistently.
+Your name: {{ info.agent }}
+Your role: {{ role.value }}
+{% if local_profile -%}
+{%- set sep = ", " -%}
+{%- for field, label in profile_encoding.items() -%}
+{%- set val = local_profile[field] if field in local_profile else none -%}
+{%- if val is none -%}
+{%- elif val is mapping -%}
+{{ label }}:
+{%- for k, v in val.items() %}
+  {{ k }}: {% if v is iterable and v is not string and v is not mapping %}{{ v | join(sep) }}{% else %}{{ v }}{% endif %}
+{%- endfor %}
+{% elif val is iterable and val is not string -%}
+{%- if val and val[0] is mapping and 'context' in val[0] -%}
+{{ label }}:
+{%- for ex in val %}
+  - ({{ ex.context }}) {{ ex.text }}
+{%- endfor %}
+{% else -%}
+{{ label }}: {{ val | join(sep) }}
+{% endif -%}
+{%- else -%}
+{{ label }}: {{ val }}
+{% endif -%}
+{%- endfor -%}
+{%- elif info.profile is not none -%}
+Your profile: {{ info.profile }}
+{% endif -%}

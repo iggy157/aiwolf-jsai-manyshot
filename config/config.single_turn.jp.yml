@@ -1,0 +1,151 @@
+# Single-turn モード用の子設定ファイル.
+# LLMプロバイダ・モデル・プロンプト定義を含む.
+# メインconfigの mode が single_turn のときに読み込まれる.
+#
+# NOTE: Step 3 で single-turn ランタイム (llm_message_history を使わず,
+# initialize/daily_initialize/daily_finish の情報と talk_history 全件をプロンプトに
+# 埋め込む実装) を追加する. 現時点では骨格のみ.
+
+llm:
+  type: google
+  # llm 直下でも model / temperature / pricing_mode / base_url を書けば
+  # 下のプロバイダセクション (openai:, google: 等) の値を上書きする (任意).
+  # model: gemini-2.5-pro
+  sleep_time: 3
+  separate_langchain: false
+  # talk / action には type の他に model / temperature / pricing_mode / base_url を直接書ける.
+  # 指定した項目は下の <provider>: セクションより優先される. 省略した項目は <provider>: から継承.
+  # 同じ会社の異なるモデルを使い分けたい場合はここに model を書く.
+  # type を省略した場合は llm.type をデフォルトとして使う.
+  talk:
+    type: openai
+    model: gpt-4o
+  action:
+    type: openai
+    model: gpt-4o-mini
+
+openai:
+  model: gpt-4o-mini
+  temperature: 0.7
+
+google:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+vertexai:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+ollama:
+  model: llama3.1
+  temperature: 0.7
+  base_url: http://localhost:11434
+
+anthropic:
+  model: claude-opus-4-5-20251101
+  temperature: 1.0
+
+# single-turn モードでは llm_message_history を使わず, 毎リクエストでフルコンテキストを
+# プロンプト本文に埋め込む. 各プロンプトで 5ブロック (identity / event / history / instruction / constraints)
+# をすべて include する.
+# initialize / daily_initialize / daily_finish は LLM に送信されず, それらで受け取った情報は
+# agent 内部の day_events に蓄積され event.jinja 経由で各プロンプトに埋め込まれる.
+prompt:
+  talk: |-
+    {{ block('identity') }}
+
+    # 日次イベント
+    {{ block('event') }}
+
+    # トーク履歴
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  whisper: |-
+    {{ block('identity') }}
+
+    # 日次イベント
+    {{ block('event') }}
+
+    # 囁き履歴
+    {% set history_source = whisper_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  divine: |-
+    {{ block('identity') }}
+
+    # 日次イベント
+    {{ block('event') }}
+
+    # トーク履歴
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  guard: |-
+    {{ block('identity') }}
+
+    # 日次イベント
+    {{ block('event') }}
+
+    # トーク履歴
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  vote: |-
+    {{ block('identity') }}
+
+    # 日次イベント
+    {{ block('event') }}
+
+    # トーク履歴
+    {% set history_source = talk_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  attack: |-
+    {{ block('identity') }}
+
+    # 日次イベント
+    {{ block('event') }}
+
+    # 囁き履歴
+    {% set history_source = whisper_history -%}
+    {% set history_start = 0 -%}
+    {{ block('history') }}
+
+    {{ block('instruction') }}
+    対象:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}

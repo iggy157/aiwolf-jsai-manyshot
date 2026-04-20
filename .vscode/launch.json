@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch default config",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}${pathSeparator}src${pathSeparator}main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-c",
+                "${workspaceFolder}${pathSeparator}config${pathSeparator}config.yml"
+            ],
+        },
+        {
+            "name": "Launch all configs in config directory",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}${pathSeparator}src${pathSeparator}main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-c",
+                "${workspaceFolder}${pathSeparator}config${pathSeparator}*.yml"
+            ],
+        }
+    ]
+}

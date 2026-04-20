@@ -1,0 +1,164 @@
+# Child configuration file for multi-turn mode.
+# Contains LLM provider / model / prompt definitions.
+# Loaded when the main config's `mode` is set to `multi_turn`.
+#
+# Prompts use {{ block('X') }} to reference blocks under prompts/<lang>/.
+# When llm.separate_langchain=true, the shared requests (initialize / daily_initialize /
+# daily_finish) include identity / event blocks so both talk and action LangChains
+# receive the minimum shared context.
+
+# Reference-script (sample game) loading. Multi-turn only.
+# When enabled, Agent.initialize() loads all markdown scripts under
+# data/sample_games_md/ as "prior study" and appends a
+# (HumanMessage script, AIMessage summary) pair to llm_message_history before the
+# INITIALIZE prompt, so every subsequent request keeps the scripts in context.
+#
+# ack_mode:
+#   llm_summary (default, recommended)
+#     Appends a 300–500-char summary (discussion flow / utterance tempo / topic
+#     transitions / character-voice consistency / history->action mapping) as the
+#     AIMessage. The summary is *pre-generated* offline by
+#     `scripts/prewarm_scenario.py` and stored in data/scenario_cache/.
+#     At game start the agent just loads the cache — zero LLM calls during
+#     INITIALIZE, so there is no risk of exceeding the server's action timeout.
+#   static
+#     Append a fixed acknowledgement (ack_static_text). No API call.
+#     Simplest; learning effect is weaker than llm_summary.
+#
+# With separate_langchain: true, both the talk and action histories get scripts
+# loaded, and each target_role asks for a different observation focus
+# (talk=discussion flow, action=history->vote/divine/guard/attack links).
+# Cache is keyed per target_role.
+#
+# Note: since the scripts are large, a provider-side prompt cache (Anthropic /
+# Gemini long-context cache) is strongly recommended.
+scenario:
+  enabled: true
+  sample_dir: ./data/sample_games_md
+  # glob: a single pattern (string) or a list of patterns. Lists are merged with
+  # duplicate paths removed. Use a list to load only a subset of scripts.
+  # Example — load only 006..015:
+  #   glob:
+  #     - sample_9_00[6-9].md
+  #     - sample_9_01[0-5].md
+  glob: sample_9_*.md
+  ack_mode: llm_summary
+  ack_static_text: "Acknowledged. I will draw on the scripts for discussion flow, tempo, and character voice."
+  # --- Summary cache settings (only relevant when ack_mode=llm_summary) ---
+  # With use_cache: true, game start looks up data/scenario_cache/ keyed by
+  # (provider, model, lang, target_role, prompt hash).
+  # Hit  → load the cached response as the AIMessage (zero LLM call).
+  # Miss → behavior depends on on_cache_miss.
+  # Populate the cache by running `uv run scripts/prewarm_scenario.py` before games.
+  use_cache: true
+  cache_dir: ./data/scenario_cache
+  # on_cache_miss:
+  #   static (default, recommended): fall back to static_ack on miss. Timeout-safe.
+  #     Run prewarm_scenario.py before the first game of a new config.
+  #   live: invoke the LLM at runtime and save the result to cache. Recovers from a
+  #     missing prewarm but risks exceeding the INITIALIZE action timeout.
+  #   error: treat a cache miss as fatal and fail INITIALIZE.
+  on_cache_miss: static
+
+llm:
+  type: google
+  # You may also specify model / temperature / pricing_mode / base_url directly under llm:
+  # to override the matching <provider>: section (optional).
+  # model: gemini-2.5-pro
+  sleep_time: 3
+  # When true, use separate LangChain instances and llm_message_history per request group.
+  # Shared requests (initialize, daily_initialize, daily_finish) are sent to both.
+  # Talk requests (talk, whisper) use llm.talk.
+  # Action requests (vote, divine, guard, attack) use llm.action.
+  # When false, a single llm.type model/history is used (legacy behavior).
+  separate_langchain: false
+  # llm.talk / llm.action accept model / temperature / pricing_mode / base_url too.
+  # Fields set here override the matching <provider>: section; omitted fields fall back to it.
+  # This lets you use "same provider, different models" (e.g. talk=openai+gpt-4o,
+  # action=openai+gpt-4o-mini). When `type` is omitted, it defaults to llm.type.
+  talk:
+    type: openai
+    model: gpt-4o              # openai + gpt-4o (stronger model for utterances)
+  action:
+    type: openai
+    model: gpt-4o-mini         # openai + gpt-4o-mini (lightweight model for decisions)
+
+openai:
+  model: gpt-4o-mini
+  temperature: 0.7
+
+google:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+vertexai:
+  model: gemini-2.0-flash-lite
+  temperature: 0.7
+
+ollama:
+  model: llama3.1
+  temperature: 0.7
+  base_url: http://localhost:11434
+
+anthropic:
+  model: claude-opus-4-5-20251101
+  temperature: 1.0
+
+prompt:
+  initialize: |-
+    {{ block('identity') }}
+    {{ block('instruction') }}
+    Respond in English to subsequent requests. Your response is sent directly to the game; do not include unnecessary content.
+  daily_initialize: |-
+    {{ block('instruction') }}
+    {{ block('event') }}
+  daily_finish: |-
+    {{ block('instruction') }}
+    {{ block('event') }}
+    {% set history_source = talk_history -%}
+    {% set history_start = sent_talk_count -%}
+    {{ block('history') }}
+  talk: |-
+    {% set history_source = talk_history -%}
+    {% set history_start = sent_talk_count -%}
+    {{ block('history') }}
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  whisper: |-
+    {% set history_source = whisper_history -%}
+    {% set history_start = sent_whisper_count -%}
+    {{ block('history') }}
+    {{ block('instruction') }}
+    {{ block('constraints') }}
+  divine: |-
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  guard: |-
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  vote: |-
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}
+  attack: |-
+    {{ block('instruction') }}
+    Targets:
+    {% for k, v in info.status_map.items() -%}
+    {%- if v == 'ALIVE' %}{{ k }}
+    {% endif -%}
+    {%- endfor %}
+    {{ block('constraints') }}

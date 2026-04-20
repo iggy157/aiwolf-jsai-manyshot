@@ -1,0 +1,61 @@
+# メイン設定ファイル.
+# モード (multi_turn / single_turn) と共通設定 (web_socket / agent / log) を定義する.
+# モード固有の設定 (llm / prompt) は configs で指定された子configファイルから読み込まれ,
+# このファイルとマージされる. キー衝突時は子configの値が優先される.
+
+mode: multi_turn
+# プロンプトブロック (prompts/<lang>/) の言語. jp / en.
+lang: jp
+
+# プロンプトブロックの見出し設定.
+# enabled: true にすると各ブロック冒頭に見出しが付与される.
+# style: markdown | xml の2種から選択.
+#   markdown → "### 履歴"
+#   xml      → "<履歴>" ... "</履歴>" (閉じタグも自動付与)
+# 見出し文字列は prompts/<lang>/_labels.yml で定義 (未定義ならファイル名をそのまま使用).
+headings:
+  enabled: false
+  style: markdown
+
+# プロフィール情報のソース.
+#   server: サーバから送られてくる info.profile 文字列をそのまま使う (既定)
+#   local : data/prompts/profiles.<lang>.yml からキャラクター名 (info.agent) をキーに
+#           詳細プロフィール (性格・話し方・発話例等) を引いてきて identity に展開する.
+#           台本 (data/sample_games_md) のキャラクターと同名で登録されているため,
+#           サーバ側が custom_profile で台本と同じ名前を配布していれば自動でマッチする.
+# ローカル名に一致しない場合は自動で info.profile へフォールバックするので安全.
+profile:
+  source: local
+
+configs:
+  multi_turn: ./config.multi_turn.jp.yml
+  single_turn: ./config.single_turn.jp.yml
+
+web_socket:
+  url: ws://127.0.0.1:8080/ws
+  token:
+  auto_reconnect: false
+
+agent:
+  num: 5
+  team: kanolab
+  kill_on_timeout: true
+
+log:
+  console_output: true
+  file_output: true
+  output_dir: ./log
+  level: debug
+
+  request:
+    name: false
+    initialize: false
+    daily_initialize: false
+    whisper: true
+    talk: true
+    daily_finish: false
+    divine: true
+    guard: true
+    vote: true
+    attack: true
+    finish: false

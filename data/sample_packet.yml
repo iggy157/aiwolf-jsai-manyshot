@@ -1,0 +1,177 @@
+# プロンプトプレビュー用のサンプルデータ.
+# scripts/preview_prompt.py がこのファイルを読み込み, 各リクエストの
+# プロンプトテンプレートをレンダリングして preview.md に出力する.
+#
+# 形式は aiwolf_nlp_common.packet.* の from_dict が受ける dict 構造に沿わせる.
+#
+# サーバは custom_profile=true のとき agent.GameName をキャラクター名に設定するため,
+# info.agent / status_map のキー / history の agent など, 全ての「エージェント名」は
+# キャラクター名 (ミナト, タクミ, ケンジ, リュウジ, ダイスケ) とする.
+# preview 英語版ではこれらを位置順に Minato/Takumi/Kenji/Ryuji/Daisuke に置換する.
+
+info:
+  game_id: preview-game-0001
+  day: 2
+  agent: ミナト
+  profile: "年齢: 10\n性別: 男性\n性格: ミナトはおっとりした性格で..."
+  medium_result: null
+  divine_result:
+    day: 2
+    agent: ミナト
+    target: リュウジ
+    result: HUMAN
+  executed_agent: ケンジ
+  attacked_agent: null
+  vote_list:
+    - day: 1
+      agent: ミナト
+      target: ケンジ
+    - day: 1
+      agent: タクミ
+      target: ケンジ
+    - day: 1
+      agent: リュウジ
+      target: ケンジ
+  attack_vote_list: null
+  status_map:
+    ミナト: ALIVE
+    タクミ: ALIVE
+    ケンジ: DEAD
+    リュウジ: ALIVE
+    ダイスケ: ALIVE
+  role_map:
+    ミナト: SEER
+  remain_count: 3
+  # per_agent=-1 (無制限) の場合サーバは remain_length を送らないため null とする.
+  remain_length: null
+  remain_skip: 0
+
+setting:
+  agent_count: 5
+  max_day: 5
+  role_num_map:
+    WEREWOLF: 1
+    SEER: 1
+    VILLAGER: 3
+  vote_visibility: true
+  # aiwolf-nlp-server/config/default_5.yml の実運用設定に合わせてある.
+  # per_talk が -1 のときサーバは JSON から omit するため, このサンプルでも null とし,
+  # base_length + mention_length の経路で constraints.jinja が動作することを確認できる.
+  talk:
+    max_count:
+      per_agent: 4
+      per_day: 20
+    max_length:
+      count_in_word: false
+      count_spaces: false
+      per_talk: null
+      mention_length: 50
+      per_agent: null
+      base_length: 50
+    max_skip: 0
+  whisper:
+    max_count:
+      per_agent: 0
+      per_day: 0
+    max_length:
+      count_in_word: false
+      count_spaces: false
+      per_talk: null
+      mention_length: 50
+      per_agent: null
+      base_length: 50
+    max_skip: 0
+  vote:
+    max_count: 1
+    allow_self_vote: false
+  attack_vote:
+    max_count: 1
+    allow_self_vote: false
+    allow_no_target: false
+  timeout:
+    action: 60000
+    response: 120000
+
+role: SEER
+
+# 呼び出し側で使う追加コンテキスト
+sent_talk_count: 2
+sent_whisper_count: 0
+
+talk_history:
+  - idx: 0
+    day: 1
+    turn: 0
+    agent: ミナト
+    text: "おはよう。まずは自己紹介から始めませんか。"
+    skip: false
+    over: false
+  - idx: 1
+    day: 1
+    turn: 0
+    agent: タクミ
+    text: "いいですね。僕は静かに見守るタイプです。"
+    skip: false
+    over: false
+  - idx: 2
+    day: 2
+    turn: 0
+    agent: リュウジ
+    text: "昨日の投票で ケンジ が追放されましたね。次が肝心です。"
+    skip: false
+    over: false
+  - idx: 3
+    day: 2
+    turn: 0
+    agent: ダイスケ
+    text: "私は タクミ が少し不自然に感じました。"
+    skip: false
+    over: false
+
+whisper_history:
+  - idx: 0
+    day: 1
+    turn: 0
+    agent: ミナト
+    text: "今日は ケンジ を狙うのが安全そうだね。"
+    skip: false
+    over: false
+  - idx: 1
+    day: 1
+    turn: 0
+    agent: リュウジ
+    text: "賛成。村側に疑われないよう表では別の話題を振ろう。"
+    skip: false
+    over: false
+
+# single-turn モードで Agent が蓄積する day_events スナップショット履歴
+day_events:
+  - day: 1
+    phase: daily_finish
+    medium_result: null
+    divine_result: null
+    executed_agent: ケンジ
+    attacked_agent: null
+    vote_list:
+      - day: 1
+        agent: ミナト
+        target: ケンジ
+      - day: 1
+        agent: タクミ
+        target: ケンジ
+      - day: 1
+        agent: リュウジ
+        target: ケンジ
+    attack_vote_list: null
+  - day: 2
+    phase: daily_initialize
+    medium_result: null
+    divine_result:
+      day: 2
+      agent: ミナト
+      target: リュウジ
+      result: HUMAN
+    executed_agent: null
+    attacked_agent: null
+    vote_list: null
+    attack_vote_list: null

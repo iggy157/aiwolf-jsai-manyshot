@@ -1,0 +1,51 @@
+{#-
+  event.jinja
+  daily_initialize / daily_finish で送られてくるイベント情報一覧.
+  - day_events があれば (single-turnでの蓄積スナップショット) それを列挙.
+  - なければ (multi-turn) 現在の info から当日の情報を表示.
+  Expects: info, (optional) day_events
+  Judge / Vote は aiwolf_nlp_common の dataclass もしくは dict として渡される可能性があるため,
+  `| default` で attribute 未定義にフォールバックする.
+-#}
+{%- macro fmt_judge(j) -%}
+{%- set _target = j.target | default(j['target'] if j is mapping else '?') -%}
+{%- set _raw_result = j.result | default(j['result'] if j is mapping else '?') -%}
+{%- set _result = _raw_result.value | default(_raw_result) -%}
+{{ _target }} → {{ _result }}
+{%- endmacro -%}
+{%- macro fmt_votes(vs) -%}
+{%- for v in vs -%}
+{{ v.agent | default(v['agent'] if v is mapping else '?') }} → {{ v.target | default(v['target'] if v is mapping else '?') }}{% if not loop.last %}, {% endif %}
+{%- endfor -%}
+{%- endmacro -%}
+{% if day_events is defined and day_events -%}
+{% for e in day_events -%}
+Day {{ e.day }} ({{ e.phase }})
+{% if e.medium_result is not none %}  霊能結果: {{ fmt_judge(e.medium_result) }}
+{% endif -%}
+{% if e.divine_result is not none %}  占い結果: {{ fmt_judge(e.divine_result) }}
+{% endif -%}
+{% if e.executed_agent is not none %}  追放: {{ e.executed_agent }}
+{% endif -%}
+{% if e.attacked_agent is not none %}  襲撃: {{ e.attacked_agent }}
+{% endif -%}
+{% if e.vote_list is not none %}  投票: {{ fmt_votes(e.vote_list) }}
+{% endif -%}
+{% if e.attack_vote_list is not none %}  襲撃投票: {{ fmt_votes(e.attack_vote_list) }}
+{% endif -%}
+{% endfor -%}
+{% elif info is not none -%}
+Day {{ info.day }}
+{% if info.medium_result is not none %}霊能結果: {{ fmt_judge(info.medium_result) }}
+{% endif -%}
+{% if info.divine_result is not none %}占い結果: {{ fmt_judge(info.divine_result) }}
+{% endif -%}
+{% if info.executed_agent is not none %}追放: {{ info.executed_agent }}
+{% endif -%}
+{% if info.attacked_agent is not none %}襲撃: {{ info.attacked_agent }}
+{% endif -%}
+{% if info.vote_list is not none %}投票: {{ fmt_votes(info.vote_list) }}
+{% endif -%}
+{% if info.attack_vote_list is not none %}襲撃投票: {{ fmt_votes(info.attack_vote_list) }}
+{% endif -%}
+{% endif -%}
