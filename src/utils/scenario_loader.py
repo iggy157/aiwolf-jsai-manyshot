@@ -5,16 +5,87 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from pathlib import Path
+
+
+def resolve_sample_dir(
+    scenario_cfg: dict[str, Any],
+    agent_cfg: dict[str, Any],
+    project_root: Path,
+) -> Path:
+    """Resolve the directory holding scenario markdown for the current agent count.
+
+    起動エージェント数に応じた台本フォルダを解決する.
+
+    解決ルール:
+        1. ``scenario.sample_dir`` が config に明示指定されていればそれを尊重 (絶対化のみ).
+        2. 未指定なら ``./data/sample_games_md/sample_games_<agent.num>`` を採用.
+    """
+    explicit = scenario_cfg.get("sample_dir")
+    if explicit:
+        path = Path(str(explicit))
+    else:
+        agent_num = int(agent_cfg.get("num", 5))
+        path = Path("./data/sample_games_md") / f"sample_games_{agent_num}"
+    if not path.is_absolute():
+        path = (project_root / path).resolve()
+    return path
+
+
+def resolve_prewarm_identity(
+    role: str,
+    scenario_cfg: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Return ``(provider, model_id)`` for cache key when prewarm override exists, else None.
+
+    ``scenario.prewarm.<role>`` に ``type`` と ``model`` の両方が指定されていれば
+    その組を返す. 一方でも欠けていれば ``None`` を返し, 呼び出し側で runtime 設定
+    (``llm.<role>``) にフォールバックさせる.
+
+    Returns:
+        (provider, model_id) tuple if both keys present in ``scenario.prewarm.<role>``;
+        otherwise ``None``.
+    """
+    prewarm = scenario_cfg.get("prewarm") or {}
+    role_override = prewarm.get(role) or {}
+    type_ = role_override.get("type")
+    model = role_override.get("model")
+    if type_ and model:
+        return str(type_), str(model)
+    return None
+
+
+def resolve_cache_dir(
+    scenario_cfg: dict[str, Any],
+    agent_cfg: dict[str, Any],
+    project_root: Path,
+) -> Path:
+    """Resolve the scenario prewarm-cache directory for the current agent count.
+
+    起動エージェント数に応じたキャッシュフォルダを解決する.
+
+    解決ルール:
+        1. ``scenario.cache_dir`` が明示指定されていればそれを尊重 (絶対化のみ).
+        2. 未指定なら ``./data/scenario_cache/sample_games_<agent.num>`` を採用.
+    """
+    explicit = scenario_cfg.get("cache_dir")
+    if explicit:
+        path = Path(str(explicit))
+    else:
+        agent_num = int(agent_cfg.get("num", 5))
+        path = Path("./data/scenario_cache") / f"sample_games_{agent_num}"
+    if not path.is_absolute():
+        path = (project_root / path).resolve()
+    return path
 
 
 def load_scenario_bodies(
     sample_dir: Path,
-    glob: str | list[str] = "sample_9_*.md",
+    glob: str | list[str] = "*.md",
 ) -> list[str]:
     """Load and return the body text of every matched scenario markdown file, sorted by name.
 

@@ -39,8 +39,8 @@ If you @-mention another agent (e.g. {{ mention_hint }}), you may use up to {{ m
 Remaining utterance budget for today: {{ info.remain_length }} characters.
 {% endif -%}
 Output only the utterance. Do not include explanations, meta commentary, or preambles.
-Do NOT imitate the script's format: `@name` mentions, `Over` / `Skip` markers, headings (e.g. `### Turn 0`), or tables (e.g. `| ID | Name |`) must not appear in your output — the server adds or handles them. Learn from the scripts' *content*: discussion flow, utterance tempo, and character voice — not their markup.
-Only when you truly have nothing more to say, output the literal control token "Over" by itself.
+Do NOT imitate the script's format: headings (e.g. `### Turn 0`), tables (e.g. `| ID | Name |`), meta labels ("Day N", "Night actions"), and the `Name: utterance` script structure are meta elements handled by the server. Learn from the scripts' *content*: discussion flow, utterance tempo, and character voice — not their markup.
+Only when you truly have nothing more to say for the rest of today, output the literal control token "Over" by itself.
 {% elif request_key == 'whisper' -%}
 {%- set ml = (setting.whisper.max_length if setting is not none and setting.whisper is not none and setting.whisper.max_length is not none else none) -%}
 {% if ml is not none and ml.per_talk is not none -%}
@@ -58,8 +58,8 @@ If you @-mention another agent (e.g. {{ mention_hint }}), you may use up to {{ m
 Remaining whisper budget for today: {{ info.remain_length }} characters.
 {% endif -%}
 Output only the whisper content. Do not include explanations, meta commentary, or preambles.
-Do NOT imitate the script's format (`@name` mentions, `Over` / `Skip` markers, headings, tables) — the server handles those.
-Only when you truly have nothing more to whisper, output the literal control token "Over" by itself.
+Do NOT imitate the script's format: headings, tables, meta labels, and the `Name: utterance` script structure are meta elements handled by the server.
+Only when you truly have nothing more to whisper for the rest of today, output the literal control token "Over" by itself.
 {% elif request_key in ['divine', 'guard', 'vote', 'attack'] -%}
 Output only the target agent name. Do not add explanations, reasons, symbols, or prefixes.
 {% endif -%}

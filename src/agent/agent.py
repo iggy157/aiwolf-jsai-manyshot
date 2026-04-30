@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 import yaml
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, pass_context
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -28,7 +28,12 @@ from utils.cost_utils import CostRecord, PricingRow, build_record, load_pricing_
 from utils.llm_builder import build_llm_model, extract_llm_overrides
 from utils.profile_resolver import load_profile_data, resolve_profile
 from utils.scenario_cache import load_cached_response, save_cache_entry
-from utils.scenario_loader import load_scenario_bodies
+from utils.scenario_loader import (
+    load_scenario_bodies,
+    resolve_cache_dir,
+    resolve_prewarm_identity,
+    resolve_sample_dir,
+)
 from utils.stoppable_thread import StoppableThread
 
 if TYPE_CHECKING:
@@ -673,11 +678,10 @@ class Agent:
         if not bool(scenario_cfg.get("enabled", False)):
             return
         project_root = Path(__file__).resolve().parent.parent.parent
-        sample_dir = Path(str(scenario_cfg.get("sample_dir", "./data/sample_games_md")))
-        if not sample_dir.is_absolute():
-            sample_dir = (project_root / sample_dir).resolve()
-        # glob は単一文字列でも, リスト (複数パターンをマージ) でも可.
-        glob_cfg = scenario_cfg.get("glob", "sample_9_*.md")
+        agent_cfg = self.config.get("agent") or {}
+        sample_dir = resolve_sample_dir(scenario_cfg, agent_cfg, project_root)
+        # glob は単一文字列でも, リスト (複数パターンをマージ) でも可. 既定はフォルダ内全 .md.
+        glob_cfg = scenario_cfg.get("glob", "*.md")
         glob: str | list[str] = (
             list(glob_cfg) if isinstance(glob_cfg, (list, tuple)) else str(glob_cfg)
         )
@@ -693,13 +697,12 @@ class Agent:
         ack_mode = str(scenario_cfg.get("ack_mode", "llm_summary"))
         use_cache = bool(scenario_cfg.get("use_cache", True))
         on_cache_miss = str(scenario_cfg.get("on_cache_miss", "static"))
-        cache_dir = Path(str(scenario_cfg.get("cache_dir", "./data/scenario_cache")))
-        if not cache_dir.is_absolute():
-            cache_dir = (project_root / cache_dir).resolve()
+        cache_dir = resolve_cache_dir(scenario_cfg, agent_cfg, project_root)
 
         lang = str(self.config.get("lang", "jp"))
         env = _get_jinja_env(lang)
         template = env.get_template("scenario.jinja")
+        system_template = env.get_template("scenario_system.jinja")
 
         static_ack = str(scenario_cfg.get(
             "ack_static_text",
@@ -717,11 +720,27 @@ class Agent:
             targets = [(self.llm_model, self.llm_message_history, "default", self.llm_meta_default)]
 
         for model, history, label, meta in targets:
+            # 1. SystemMessage: 本番出力時の運用ルール (target_role 別).
+            #    形式の禁止事項などはこちら側に集約し, scenario.jinja は台本提示と要約指示に集中させる.
+            system_text = system_template.render(target_role=label).strip()
+            history.append(SystemMessage(content=system_text))
+            self.agent_logger.logger.info(
+                [
+                    "SCENARIO",
+                    "system",
+                    label,
+                    f"chars={len(system_text)}",
+                    system_text,
+                ],
+            )
+            # 2. HumanMessage: 台本 + 要約指示.
+            #    agent_num は scenario.jinja の action 観点を 5p / 9p で切り替えるために渡す.
             prompt = template.render(
                 scenario_bodies=bodies,
                 scenario_count=len(bodies),
                 ack_mode=ack_mode,
                 target_role=label,
+                agent_num=agent_cfg.get("num"),
                 headings=self.config.get("headings") or {},
             ).strip()
             history.append(HumanMessage(content=prompt))
@@ -744,16 +763,27 @@ class Agent:
                 )
                 continue
 
+            # cache key の (provider, model). scenario.prewarm.<label> があればそちらを優先.
+            # (なければ runtime の meta から).
+            prewarm_identity = resolve_prewarm_identity(label, scenario_cfg)
+            if prewarm_identity is not None:
+                cache_provider, cache_model_id = prewarm_identity
+            elif meta is not None:
+                cache_provider, cache_model_id = meta["provider_key"], meta["model_id"]
+            else:
+                cache_provider, cache_model_id = "", ""
+
             # ack_mode = llm_summary: キャッシュヒットを優先. prewarm 済みなら LLM 呼び出しはゼロで完了する.
             cached_response: str | None = None
-            if use_cache and meta is not None:
+            if use_cache and (prewarm_identity is not None or meta is not None):
                 cached_response = load_cached_response(
                     cache_dir,
-                    meta["provider_key"],
-                    meta["model_id"],
+                    cache_provider,
+                    cache_model_id,
                     lang,
                     label,
                     prompt,
+                    system_text=system_text,
                 )
             if cached_response is not None:
                 history.append(AIMessage(content=cached_response))
@@ -766,8 +796,8 @@ class Agent:
             if on_cache_miss == "error":
                 msg = (
                     f"Scenario cache miss for target_role={label}, "
-                    f"provider={meta['provider_key'] if meta else '?'}, "
-                    f"model={meta['model_id'] if meta else '?'}. "
+                    f"provider={cache_provider or '?'}, "
+                    f"model={cache_model_id or '?'}. "
                     "Run `uv run scripts/prewarm_scenario.py` or set scenario.on_cache_miss to "
                     "'static' / 'live'."
                 )
@@ -793,16 +823,17 @@ class Agent:
                 history.append(ai)
                 self._record_cost(ai, meta, "scenario", label)
                 response = ai.content if isinstance(ai.content, str) else str(ai.content)
-                if use_cache and meta is not None:
+                if use_cache and (prewarm_identity is not None or meta is not None):
                     try:
                         saved_path = save_cache_entry(
                             cache_dir,
-                            meta["provider_key"],
-                            meta["model_id"],
+                            cache_provider,
+                            cache_model_id,
                             lang,
                             label,
                             prompt,
                             response,
+                            system_text=system_text,
                         )
                         self.agent_logger.logger.info(
                             ["SCENARIO", "cache_saved", label, str(saved_path)],

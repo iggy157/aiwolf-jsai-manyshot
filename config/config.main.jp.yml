@@ -29,13 +29,13 @@ configs:
   single_turn: ./config.single_turn.jp.yml
 
 web_socket:
-  url: ws://127.0.0.1:8080/ws
+  url: ws://133.167.32.100:8005/ws
   token:
   auto_reconnect: false
 
 agent:
-  num: 9
-  team: kanolab
+  num: 5
+  team: yharada
   kill_on_timeout: true
 
 log:

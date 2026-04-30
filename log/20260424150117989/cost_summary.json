@@ -1,0 +1,204 @@
+{
+  "game_id": "01KPZ182X5GTAP9A1VAJ70M7AB",
+  "mode": "multi_turn",
+  "updated_at": "2026-04-24T06:01:26+00:00",
+  "total": {
+    "input_tokens": 7201,
+    "cached_input_tokens": 248832,
+    "output_tokens": 454,
+    "thinking_tokens": 0,
+    "cost_usd": 0.0040659,
+    "call_count": 5,
+    "unknown_pricing_calls": 4
+  },
+  "by_model": {
+    "OpenAI/gpt-5.2/standard": {
+      "input_tokens": 5411,
+      "cached_input_tokens": 198656,
+      "output_tokens": 397,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "call_count": 4,
+      "unknown_pricing_calls": 4
+    },
+    "OpenAI/gpt-4o-mini/standard": {
+      "input_tokens": 1790,
+      "cached_input_tokens": 50176,
+      "output_tokens": 57,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0040659,
+      "call_count": 1,
+      "unknown_pricing_calls": 0
+    }
+  },
+  "by_agent": {
+    "yharada5": {
+      "input_tokens": 4011,
+      "cached_input_tokens": 98944,
+      "output_tokens": 150,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0040659,
+      "call_count": 2,
+      "unknown_pricing_calls": 1
+    },
+    "yharada3": {
+      "input_tokens": 1562,
+      "cached_input_tokens": 49536,
+      "output_tokens": 95,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "call_count": 1,
+      "unknown_pricing_calls": 1
+    },
+    "yharada4": {
+      "input_tokens": 1437,
+      "cached_input_tokens": 49536,
+      "output_tokens": 123,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "call_count": 1,
+      "unknown_pricing_calls": 1
+    },
+    "yharada1": {
+      "input_tokens": 191,
+      "cached_input_tokens": 50816,
+      "output_tokens": 86,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "call_count": 1,
+      "unknown_pricing_calls": 1
+    }
+  },
+  "by_agent_model": {
+    "yharada5": {
+      "OpenAI/gpt-5.2/standard": {
+        "input_tokens": 2221,
+        "cached_input_tokens": 48768,
+        "output_tokens": 93,
+        "thinking_tokens": 0,
+        "cost_usd": 0.0,
+        "call_count": 1,
+        "unknown_pricing_calls": 1
+      },
+      "OpenAI/gpt-4o-mini/standard": {
+        "input_tokens": 1790,
+        "cached_input_tokens": 50176,
+        "output_tokens": 57,
+        "thinking_tokens": 0,
+        "cost_usd": 0.0040659,
+        "call_count": 1,
+        "unknown_pricing_calls": 0
+      }
+    },
+    "yharada3": {
+      "OpenAI/gpt-5.2/standard": {
+        "input_tokens": 1562,
+        "cached_input_tokens": 49536,
+        "output_tokens": 95,
+        "thinking_tokens": 0,
+        "cost_usd": 0.0,
+        "call_count": 1,
+        "unknown_pricing_calls": 1
+      }
+    },
+    "yharada4": {
+      "OpenAI/gpt-5.2/standard": {
+        "input_tokens": 1437,
+        "cached_input_tokens": 49536,
+        "output_tokens": 123,
+        "thinking_tokens": 0,
+        "cost_usd": 0.0,
+        "call_count": 1,
+        "unknown_pricing_calls": 1
+      }
+    },
+    "yharada1": {
+      "OpenAI/gpt-5.2/standard": {
+        "input_tokens": 191,
+        "cached_input_tokens": 50816,
+        "output_tokens": 86,
+        "thinking_tokens": 0,
+        "cost_usd": 0.0,
+        "call_count": 1,
+        "unknown_pricing_calls": 1
+      }
+    }
+  },
+  "records": [
+    {
+      "ts": "2026-04-24T06:01:24+00:00",
+      "agent": "yharada5",
+      "request": "initialize",
+      "label": "talk",
+      "provider": "OpenAI",
+      "model_id": "gpt-5.2",
+      "pricing_mode": "standard",
+      "input_tokens": 2221,
+      "cached_input_tokens": 48768,
+      "output_tokens": 93,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "unknown_pricing": true
+    },
+    {
+      "ts": "2026-04-24T06:01:24+00:00",
+      "agent": "yharada3",
+      "request": "initialize",
+      "label": "talk",
+      "provider": "OpenAI",
+      "model_id": "gpt-5.2",
+      "pricing_mode": "standard",
+      "input_tokens": 1562,
+      "cached_input_tokens": 49536,
+      "output_tokens": 95,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "unknown_pricing": true
+    },
+    {
+      "ts": "2026-04-24T06:01:24+00:00",
+      "agent": "yharada4",
+      "request": "initialize",
+      "label": "talk",
+      "provider": "OpenAI",
+      "model_id": "gpt-5.2",
+      "pricing_mode": "standard",
+      "input_tokens": 1437,
+      "cached_input_tokens": 49536,
+      "output_tokens": 123,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "unknown_pricing": true
+    },
+    {
+      "ts": "2026-04-24T06:01:25+00:00",
+      "agent": "yharada1",
+      "request": "initialize",
+      "label": "talk",
+      "provider": "OpenAI",
+      "model_id": "gpt-5.2",
+      "pricing_mode": "standard",
+      "input_tokens": 191,
+      "cached_input_tokens": 50816,
+      "output_tokens": 86,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0,
+      "unknown_pricing": true
+    },
+    {
+      "ts": "2026-04-24T06:01:26+00:00",
+      "agent": "yharada5",
+      "request": "initialize",
+      "label": "action",
+      "provider": "OpenAI",
+      "model_id": "gpt-4o-mini",
+      "pricing_mode": "standard",
+      "input_tokens": 1790,
+      "cached_input_tokens": 50176,
+      "output_tokens": 57,
+      "thinking_tokens": 0,
+      "cost_usd": 0.0040659,
+      "unknown_pricing": false
+    }
+  ]
+}

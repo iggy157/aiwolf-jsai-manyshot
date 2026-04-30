@@ -3,10 +3,14 @@
 # メインconfigの mode が multi_turn のときに読み込まれる.
 
 # お手本台本 (サンプル対局) の読み込み設定. multi-turn 専用.
-# 有効にすると, Agent.initialize() の最初で data/sample_games_md/ 以下の
-# Markdown 台本を読み込み, LLM に "事前学習" として与えてから INITIALIZE
-# プロンプトを送信する. 台本は HumanMessage, 応答は AIMessage として
-# llm_message_history に積まれ, 以降の全リクエストでコンテキストとして保持される.
+# 有効にすると, Agent.initialize() の最初で
+# data/sample_games_md/sample_games_<agent.num>/ 以下の Markdown 台本を全部読み込み,
+# LLM に "事前学習" として与えてから INITIALIZE プロンプトを送信する.
+# 台本は HumanMessage, 応答は AIMessage として llm_message_history に積まれ, 以降の
+# 全リクエストでコンテキストとして保持される.
+#
+# 参照フォルダは agent.num の値で自動選択 (5 → sample_games_5, 9 → sample_games_9).
+# enabled を false にすると一切読み込まない.
 #
 # separate_langchain: true のときは talk / action 両系統の履歴に同じ台本を積む.
 #
@@ -23,22 +27,39 @@
 # 注意:
 #   台本の量はプロバイダの prompt cache を効かせないと毎ターンの入力コストが
 #   膨張する. Anthropic / Gemini の長文キャッシュが使える構成を推奨.
+#
+# 上級オプション (通常は不要):
+#   sample_dir: 参照フォルダを明示指定 (絶対 or プロジェクトルート相対). 既定の
+#               ./data/sample_games_md/sample_games_<agent.num>/ を上書きしたいときのみ.
+#   glob:       読み込むファイルの glob パターン. 既定は "*.md" (フォルダ内全件).
+#   cache_dir:  キャッシュ先を明示指定. 既定は
+#               ./data/scenario_cache/sample_games_<agent.num>/.
 scenario:
   enabled: true
-  sample_dir: ./data/sample_games_md
-  # 006〜015 に絞る (glob の [06-15] は文字クラス扱いで範囲指定にならないので範囲ごとに分解)
-  glob:
-    - sample_9_00[6-9].md   # 006-009
-    - sample_9_01[0-5].md   # 010-015
   ack_mode: llm_summary
   ack_static_text: "承知しました。台本を参考に、議論展開・発話のテンポ・キャラクターの口調を踏まえて演じます。"
   # --- キャッシュ設定 (ack_mode=llm_summary のとき有効) ---
   # 事前に `uv run scripts/prewarm_scenario.py` で要約を生成しキャッシュする.
   # ゲーム起動時はキャッシュを読むだけ (LLM 呼び出しゼロ → INITIALIZE タイムアウト回避).
+  # キャッシュ先は agent.num に応じて自動選択
+  # (./data/scenario_cache/sample_games_<num>/).
   use_cache: true
-  cache_dir: ./data/scenario_cache
   # キャッシュミス時: static=静的ackフォールバック (推奨) / live=実行時に呼び直す / error=失敗扱い
   on_cache_miss: static
+  # --- prewarm 専用モデル指定 (任意) ---
+  # 指定があれば prewarm のときだけそのモデルで要約を生成する.
+  # cache key も (provider, model) を prewarm 側で計算するため, 実ゲーム時の
+  # llm.<role> とは無関係にキャッシュヒットが保証される.
+  # 役割キー (talk / action / default) ごとに独立指定可能. type と model の
+  # 両方が揃った role だけが override 対象, 欠けていれば llm.<role> へフォールバック.
+  # 用途例: runtime は gpt-5.2, prewarm は gpt-4o-mini で安く済ませる.
+  prewarm:
+    talk:
+      type: openai
+      model: gpt-5.4
+    action:
+      type: openai
+      model: gpt-5.4
 
 llm:
   type: openai
@@ -59,7 +80,7 @@ llm:
   # type を省略した場合は llm.type をデフォルトとして使う.
   talk:
     type: openai
-    model: gpt-4o              # openai + gpt-4o (talk は少し強めのモデル)
+    model: gpt-5.2        # openai + gpt-4o (talk は少し強めのモデル)
   action:
     type: openai
     model: gpt-4o-mini         # openai + gpt-4o-mini (action は軽量モデル)
@@ -82,7 +103,7 @@ ollama:
   base_url: http://localhost:11434
 
 anthropic:
-  model: claude-opus-4-5-20251101
+  model: claude-haiku-4-5
   temperature: 1.0
 
 # multi-turn モードでは LLM の会話履歴 (llm_message_history) が LangChain 側で保持されるため,
