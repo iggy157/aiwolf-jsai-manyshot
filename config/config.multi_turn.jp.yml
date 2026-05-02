@@ -86,8 +86,10 @@ llm:
   # 同じ会社の異なるモデルを talk と action で使い分けたい場合はここに model を書く.
   # type を省略した場合は llm.type をデフォルトとして使う.
   talk:
-    type: openai
-    model: gpt-5.2        # openai + gpt-4o (talk は少し強めのモデル)
+    type: anthropic
+    model: claude-sonnet-4-6
+    # type: openai
+    # model: gpt-5.2
   action:
     type: openai
     model: gpt-4o-mini         # openai + gpt-4o-mini (action は軽量モデル)
@@ -112,6 +114,14 @@ ollama:
 anthropic:
   model: claude-haiku-4-5
   temperature: 1.0
+  # Prompt cache の自動注入. true (default) のとき, 毎コール直前に
+  # 末尾 HumanMessage 直前の最後の AIMessage に cache_control を自動付与し,
+  # scenario + 過去ターンを Anthropic の prompt cache に乗せる.
+  # OpenAI の自動キャッシュと同等の効果. false にすると素の挙動 (全額課金).
+  cache: true
+  # cache TTL: "5m" (default, 1.25× write cost) または "1h" (2× write cost).
+  # 1局が 5 分以内に終わるなら 5m で十分. 長引くゲームは 1h を検討.
+  cache_ttl: "5m"
 
 # multi-turn モードでは LLM の会話履歴 (llm_message_history) が LangChain 側で保持されるため,
 # 各リクエストのプロンプトは最低限のワンラインで足りる.
@@ -119,6 +129,17 @@ anthropic:
 # 共通リクエスト (initialize / daily_initialize / daily_finish) のプロンプトで identity / event ブロックを
 # include し, 両系統に最低限の情報共有を行う.
 prompt:
+  # narration_split:
+  #   false (default) → 旧来動作. 発話本文だけを LLM に出力させ, ト書き・地の文は禁止.
+  #   true → LLM に発話を ``「...」`` で囲ませ, ``「」`` の外側にト書き・地の文を許可する.
+  #          サーバには ``「」`` 内側だけが連結されて送信される (extract_dialogue_quotes).
+  #          文字数制限 (per_talk / base_length 等) は ``「」`` 内側の合計のみに適用される
+  #          ことを LLM に明示する. ト書き分は API トークンとしてのみ消費 (送信は無し).
+  #   注意: true にすると scenario_system / constraints のプロンプト本文が変わるため,
+  #         scenario_cache のキーが別キーになる (= 既存キャッシュは使えないので
+  #         prewarm を再実行する必要あり, または on_cache_miss=static で fallback 動作).
+  narration_split: false
+
   initialize: |-
     {{ block('identity') }}
     {{ block('instruction') }}

@@ -17,8 +17,10 @@ from jinja2 import Environment, FileSystemLoader, pass_context
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 if TYPE_CHECKING:
-    from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.messages import BaseMessage
+    from langchain_core.runnables import Runnable
+
+    LLMRunnable = Runnable[Any, BaseMessage]
 
 from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Status, Talk
 
@@ -29,6 +31,7 @@ from utils.llm_builder import build_llm_model, extract_llm_overrides
 from utils.profile_resolver import load_profile_data, resolve_profile
 from utils.scenario_cache import load_cached_response, save_cache_entry
 from utils.scenario_loader import (
+    derive_mechanics_flags,
     load_scenario_bodies,
     load_scenario_bodies_by_day,
     resolve_cache_dir,
@@ -36,6 +39,7 @@ from utils.scenario_loader import (
     resolve_sample_dir,
 )
 from utils.stoppable_thread import StoppableThread
+from utils.text_postprocess import extract_dialogue_quotes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -110,7 +114,8 @@ def _get_jinja_env(lang: str) -> Environment:
                 return body
             style = str(headings_cfg.get("style", "markdown"))
             prefix, suffix, has_close = _HEADING_STYLES.get(
-                style, _HEADING_STYLES["markdown"],
+                style,
+                _HEADING_STYLES["markdown"],
             )
             label = labels.get(name, name)
             head = f"{prefix}{label}{suffix}"
@@ -121,6 +126,7 @@ def _get_jinja_env(lang: str) -> Environment:
         env.globals["block"] = block
         _JINJA_ENVS[lang] = env
     return _JINJA_ENVS[lang]
+
 
 _PRICING_ROOT = Path(__file__).parent.joinpath("./../../data/model_cost").resolve()
 # プロセス内で一度だけ料金テーブルをロードして共有する.
@@ -167,10 +173,10 @@ class Agent:
 
         self.sent_talk_count: int = 0
         self.sent_whisper_count: int = 0
-        self.llm_model: BaseChatModel | None = None
+        self.llm_model: LLMRunnable | None = None
         self.llm_message_history: list[BaseMessage] = []
-        self.llm_model_talk: BaseChatModel | None = None
-        self.llm_model_action: BaseChatModel | None = None
+        self.llm_model_talk: LLMRunnable | None = None
+        self.llm_model_action: LLMRunnable | None = None
         self.llm_message_history_talk: list[BaseMessage] = []
         self.llm_message_history_action: list[BaseMessage] = []
         # single-turnモードで各日のdaily_initialize/daily_finishスナップショットを蓄積する.
@@ -208,6 +214,20 @@ class Agent:
             bool: True if single-turn / single-turnの場合はTrue
         """
         return str(self.config.get("mode", "multi_turn")) == "single_turn"
+
+    def _is_narration_split(self) -> bool:
+        """Return whether talk/whisper output uses narration-split mode.
+
+        talk/whisper の発話を ``「...」`` で囲ませてト書きを外側に書くモードかを返す.
+        ``config.prompt.narration_split`` (default False) を見る. True のとき:
+          - SystemMessage / constraints プロンプトが ``「」`` 必須・ト書き許可形式に切替.
+          - サーバ送信前に ``extract_dialogue_quotes`` で ``「」`` 内側のみ抽出.
+
+        Returns:
+            bool: True if narration-split mode is enabled / narration_split 有効ならTrue
+        """
+        prompt_cfg = self.config.get("prompt") or {}
+        return bool(prompt_cfg.get("narration_split", False))
 
     @staticmethod
     def timeout(func: Callable[P, T]) -> Callable[P, T]:
@@ -376,7 +396,7 @@ class Agent:
     def _resolve_targets(
         self,
         request: Request,
-    ) -> list[tuple[BaseChatModel, list[BaseMessage], str, dict[str, str] | None]]:
+    ) -> list[tuple[LLMRunnable, list[BaseMessage], str, dict[str, str] | None]]:
         """Return list of (model, history, label, meta) tuples to send the prompt to.
 
         プロンプトの送信先 (モデル, 履歴, ラベル, 料金メタ情報) の組を返す.
@@ -385,7 +405,7 @@ class Agent:
             request (Request): Request type / リクエストタイプ
 
         Returns:
-            list[tuple[BaseChatModel, list[BaseMessage], str, dict[str, str] | None]]:
+            list[tuple[LLMRunnable, list[BaseMessage], str, dict[str, str] | None]]:
                 Send targets / 送信先のリスト
         """
         if not self._is_separate_langchain():
@@ -393,7 +413,7 @@ class Agent:
                 return []
             return [(self.llm_model, self.llm_message_history, "default", self.llm_meta_default)]
 
-        targets: list[tuple[BaseChatModel, list[BaseMessage], str, dict[str, str] | None]] = []
+        targets: list[tuple[LLMRunnable, list[BaseMessage], str, dict[str, str] | None]] = []
         if request in _SHARED_REQUESTS:
             if self.llm_model_talk is not None:
                 targets.append(
@@ -417,17 +437,21 @@ class Agent:
 
     def _record_cost(
         self,
-        ai: AIMessage,
+        ai: BaseMessage,
         meta: dict[str, str] | None,
         request_key: str,
         label: str,
     ) -> CostRecord | None:
-        """Extract token usage from an AIMessage and append a CostRecord.
+        """Extract token usage from a chat message and append a CostRecord.
 
-        AIMessage から token usage を抽出し CostRecord を蓄積する.
+        LLM 応答から token usage を抽出し CostRecord を蓄積する.
+
+        ``ai`` は実用上 ``AIMessage`` だが, ``Runnable[Any, BaseMessage].invoke()`` の
+        戻り値型に合わせて ``BaseMessage`` を受け取る. usage_metadata /
+        response_metadata は ``getattr`` で安全に参照する.
 
         Args:
-            ai (AIMessage): LLM response / LLM応答
+            ai (BaseMessage): LLM response / LLM応答
             meta (dict | None): Model meta info / モデルメタ情報
             request_key (str): Request key / リクエストキー
             label (str): Target label (default/talk/action) / ターゲットラベル
@@ -511,7 +535,8 @@ class Agent:
         return self.game_id_cache
 
     def _resolve_local_profile(
-        self, lang: str,
+        self,
+        lang: str,
     ) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
         """Return (local_profile, profile_encoding) honoring config.profile.source.
 
@@ -569,6 +594,7 @@ class Agent:
             "headings": self.config.get("headings") or {},
             "local_profile": local_profile,
             "profile_encoding": profile_encoding,
+            "narration_split": self._is_narration_split(),
         }
         env = _get_jinja_env(lang)
         template = env.from_string(prompt)
@@ -610,7 +636,7 @@ class Agent:
         self,
         model_type: str,
         overrides: dict[str, Any] | None = None,
-    ) -> tuple[BaseChatModel, dict[str, str]]:
+    ) -> tuple[LLMRunnable, dict[str, str]]:
         """Thin wrapper around utils.llm_builder.build_llm_model.
 
         config の provider セクションを base に, ロール側の overrides を上書き適用して
@@ -642,15 +668,18 @@ class Agent:
             talk_overrides = extract_llm_overrides(talk_cfg, role_name="talk")
             action_overrides = extract_llm_overrides(action_cfg, role_name="action")
             self.llm_model_talk, self.llm_meta_talk = self._create_llm_model(
-                talk_type, talk_overrides,
+                talk_type,
+                talk_overrides,
             )
             self.llm_model_action, self.llm_meta_action = self._create_llm_model(
-                action_type, action_overrides,
+                action_type,
+                action_overrides,
             )
         else:
             default_overrides = extract_llm_overrides(llm_cfg, role_name="")
             self.llm_model, self.llm_meta_default = self._create_llm_model(
-                default_type, default_overrides,
+                default_type,
+                default_overrides,
             )
 
         self._feed_sample_games()
@@ -731,9 +760,7 @@ class Agent:
         agent_cfg = self.config.get("agent") or {}
         sample_dir = resolve_sample_dir(scenario_cfg, agent_cfg, project_root)
         glob_cfg = scenario_cfg.get("glob", "*.md")
-        glob: str | list[str] = (
-            list(glob_cfg) if isinstance(glob_cfg, (list, tuple)) else str(glob_cfg)
-        )
+        glob: str | list[str] = list(glob_cfg) if isinstance(glob_cfg, (list, tuple)) else str(glob_cfg)
 
         if day is None:
             # full delivery: 全 manyshot を全 day まとめて
@@ -743,7 +770,10 @@ class Agent:
         else:
             # by_day delivery: 該当 day の章節だけ. Day 0 は preamble 込み.
             bodies = load_scenario_bodies_by_day(
-                sample_dir, glob, day, include_preamble=(day == 0),
+                sample_dir,
+                glob,
+                day,
+                include_preamble=(day == 0),
             )
             template_name = "scenario_daily.jinja"
             log_phase = f"SCENARIO_DAY{day}"
@@ -752,7 +782,9 @@ class Agent:
             self.agent_logger.logger.warning(
                 "scenario %s but no bodies found at %s (glob=%s, day=%s)",
                 "by_day enabled" if day is not None else "enabled",
-                sample_dir, glob, day,
+                sample_dir,
+                glob,
+                day,
             )
             return
 
@@ -766,25 +798,35 @@ class Agent:
         template = env.get_template(template_name)
         system_template = env.get_template("scenario_system.jinja") if is_initial else None
 
-        static_ack = str(scenario_cfg.get(
-            "ack_static_text",
-            "承知しました。台本を参考に、議論展開・発話のテンポ・キャラクターの口調を踏まえて演じます。",
-        ))
+        static_ack = str(
+            scenario_cfg.get(
+                "ack_static_text",
+                "承知しました。台本を参考に、議論展開・発話のテンポ・キャラクターの口調を踏まえて演じます。",
+            ),
+        )
 
         # separate_langchain の場合は talk と action の両方に積む. そうでない場合は default のみ.
         if self._is_separate_langchain():
-            targets: list[tuple[BaseChatModel | None, list[BaseMessage], str, dict[str, str] | None]] = [
+            targets: list[tuple[LLMRunnable | None, list[BaseMessage], str, dict[str, str] | None]] = [
                 (self.llm_model_talk, self.llm_message_history_talk, "talk", self.llm_meta_talk),
                 (self.llm_model_action, self.llm_message_history_action, "action", self.llm_meta_action),
             ]
         else:
             targets = [(self.llm_model, self.llm_message_history, "default", self.llm_meta_default)]
 
+        agent_num_int = int(agent_cfg["num"]) if agent_cfg.get("num") is not None else None
+        mechanics = derive_mechanics_flags(agent_num_int)
+        narration_split = self._is_narration_split()
+
         for model, history, label, meta in targets:
             # 1. SystemMessage (初回 feed のみ). 後続 feed では既に履歴に存在.
             system_text = ""
             if is_initial and system_template is not None:
-                system_text = system_template.render(target_role=label).strip()
+                system_text = system_template.render(
+                    target_role=label,
+                    mechanics=mechanics,
+                    narration_split=narration_split,
+                ).strip()
                 history.append(SystemMessage(content=system_text))
                 self.agent_logger.logger.info(
                     [log_phase, "system", label, f"chars={len(system_text)}", system_text],
@@ -796,7 +838,8 @@ class Agent:
                 "scenario_count": len(bodies),
                 "ack_mode": ack_mode,
                 "target_role": label,
-                "agent_num": agent_cfg.get("num"),
+                "agent_num": agent_num_int,
+                "mechanics": mechanics,
                 "headings": self.config.get("headings") or {},
             }
             if day is not None:
@@ -804,8 +847,15 @@ class Agent:
             prompt = template.render(**render_kwargs).strip()
             history.append(HumanMessage(content=prompt))
             self.agent_logger.logger.info(
-                [log_phase, "prompt", label, f"count={len(bodies)}",
-                 f"ack_mode={ack_mode}", f"chars={len(prompt)}", prompt],
+                [
+                    log_phase,
+                    "prompt",
+                    label,
+                    f"count={len(bodies)}",
+                    f"ack_mode={ack_mode}",
+                    f"chars={len(prompt)}",
+                    prompt,
+                ],
             )
             if ack_mode == "static":
                 history.append(AIMessage(content=static_ack))
@@ -825,8 +875,14 @@ class Agent:
             cached_response: str | None = None
             if use_cache and (prewarm_identity is not None or meta is not None):
                 cached_response = load_cached_response(
-                    cache_dir, cache_provider, cache_model_id, lang, label, prompt,
-                    system_text=system_text, day=day,
+                    cache_dir,
+                    cache_provider,
+                    cache_model_id,
+                    lang,
+                    label,
+                    prompt,
+                    system_text=system_text,
+                    day=day,
                 )
             if cached_response is not None:
                 history.append(AIMessage(content=cached_response))
@@ -848,8 +904,14 @@ class Agent:
             if on_cache_miss != "live" or model is None:
                 history.append(AIMessage(content=static_ack))
                 self.agent_logger.logger.warning(
-                    [log_phase, "ack", label, "cache_miss_static_fallback",
-                     "run prewarm_scenario.py to populate cache", static_ack],
+                    [
+                        log_phase,
+                        "ack",
+                        label,
+                        "cache_miss_static_fallback",
+                        "run prewarm_scenario.py to populate cache",
+                        static_ack,
+                    ],
                 )
                 continue
 
@@ -862,8 +924,15 @@ class Agent:
                 if use_cache and (prewarm_identity is not None or meta is not None):
                     try:
                         saved_path = save_cache_entry(
-                            cache_dir, cache_provider, cache_model_id, lang, label,
-                            prompt, response, system_text=system_text, day=day,
+                            cache_dir,
+                            cache_provider,
+                            cache_model_id,
+                            lang,
+                            label,
+                            prompt,
+                            response,
+                            system_text=system_text,
+                            day=day,
                         )
                         self.agent_logger.logger.info(
                             [log_phase, "cache_saved", label, str(saved_path)],
@@ -893,6 +962,30 @@ class Agent:
             self._feed_sample_games_for_day(self.info.day)
         self._send_message_to_llm(self.request)
 
+    def _postprocess_utterance(self, response: str | None, label: str) -> str:
+        """Apply send-time post-processing (e.g. narration_split extraction).
+
+        サーバ送信直前の整形処理. ``narration_split`` モード ON のときは
+        ``「」`` 内の発話本文だけを抽出して連結する. それ以外は raw 応答をそのまま返す.
+
+        Args:
+            response: LLM 応答 (None なら空文字を返す).
+            label: ログ用ラベル ("talk" / "whisper").
+
+        Returns:
+            str: サーバへ送る最終発話 / Final utterance to send.
+        """
+        if response is None:
+            return ""
+        if not self._is_narration_split():
+            return response
+        extracted = extract_dialogue_quotes(response)
+        if extracted != response:
+            self.agent_logger.logger.info(
+                ["NARRATION_SPLIT", label, "raw", response, "extracted", extracted],
+            )
+        return extracted
+
     def whisper(self) -> str:
         """Return response to whisper request.
 
@@ -903,7 +996,7 @@ class Agent:
         """
         response = self._send_message_to_llm(self.request)
         self.sent_whisper_count = len(self.whisper_history)
-        return response or ""
+        return self._postprocess_utterance(response, "whisper")
 
     def talk(self) -> str:
         """Return response to talk request.
@@ -915,7 +1008,7 @@ class Agent:
         """
         response = self._send_message_to_llm(Request.TALK)
         self.sent_talk_count = len(self.talk_history)
-        return response or ""
+        return self._postprocess_utterance(response, "talk")
 
     def daily_finish(self) -> None:
         """Perform processing for daily finish request.

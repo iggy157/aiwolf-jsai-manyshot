@@ -19,6 +19,38 @@ if TYPE_CHECKING:
 _DAY_HEADER_RE = re.compile(r"^## (\d+)日目\s*$", re.MULTILINE)
 
 
+# 村サイズが「小さい村」(役職減・人狼1人) と判定される閾値. 5人村のみ該当.
+_SMALL_VILLAGE_AGENT_NUM = 5
+
+
+def derive_mechanics_flags(agent_num: int | None) -> dict[str, bool]:
+    """Return per-game-mechanics presence flags for the given agent count.
+
+    村サイズから「このゲームに存在する仕組み」を表す真偽値辞書を返す.
+    scenario テンプレートが「囁き」「護衛」「霊媒」などの語を出すかどうかを,
+    マジックナンバーを散らさずに分岐させるためのフラグ.
+
+    現在の挙動:
+        - 5人村: 役職構成は WEREWOLF x1 / POSSESSED x1 / SEER x1 / VILLAGER x2.
+          人狼が 1 人なので **囁き (whisper) は発生せず**, 騎士・霊媒も登場しない.
+        - 9人村以上: 人狼 2+ 体, 騎士・霊媒も登場するのが標準. 全フラグ True.
+        - ``agent_num`` が None や 5 以外の不明値: 9 人村相当 (全 True) でフォールバック.
+          知らない構成を想定するより, 全機構をカバーした表現の方が安全.
+
+    Args:
+        agent_num: 1ゲームの参加エージェント数 (config.agent.num).
+
+    Returns:
+        ``has_whisper`` / ``has_bodyguard`` / ``has_medium`` のフラグ辞書.
+    """
+    is_small_village = agent_num == _SMALL_VILLAGE_AGENT_NUM
+    return {
+        "has_whisper": not is_small_village,
+        "has_bodyguard": not is_small_village,
+        "has_medium": not is_small_village,
+    }
+
+
 def resolve_sample_dir(
     scenario_cfg: dict[str, Any],
     agent_cfg: dict[str, Any],

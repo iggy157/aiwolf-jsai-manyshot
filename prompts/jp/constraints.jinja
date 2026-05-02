@@ -1,7 +1,7 @@
 {#-
   constraints.jinja
   出力形式 (request_key 別) と文字数制限 (サーバ setting / info から動的取得) を表示.
-  Expects: request_key, setting?, info?
+  Expects: request_key, setting?, info?, narration_split?
 
   サーバの文字数制限モデル (aiwolf-nlp-server):
     - per_talk:       1発言あたりの絶対上限 (値が -1 のとき packet から omit される → None)
@@ -13,7 +13,11 @@
   メンション例は info.status_map から自分以外のエージェント名を1件選んで生成する.
   (サーバは @<agent.GameName> を検出するため, custom_profile 有効時はキャラクター名,
    無効時は "Agent[01]" 形式がそのまま正しい例になる.)
+
+  narration_split=True のときは, 発話本文を ``「...」`` で囲ませてト書きを外側に書く
+  モード. 文字数制限は ``「」`` 内側の合計のみに適用される旨を LLM に伝える.
 -#}
+{%- set _narration_split = narration_split if narration_split is defined else False -%}
 {%- set mention_ns = namespace(example=none) -%}
 {%- if info is not none and info.status_map is not none -%}
 {%- for name in info.status_map -%}
@@ -25,13 +29,14 @@
 {%- set mention_hint = ('`@' ~ mention_ns.example ~ '`') if mention_ns.example is not none else '他のエージェント名の前に @ を付けた形式' -%}
 {% if request_key == 'talk' -%}
 {%- set ml = (setting.talk.max_length if setting is not none and setting.talk is not none and setting.talk.max_length is not none else none) -%}
+{%- set _length_unit = '「」内の発話本文' if _narration_split else '1発言' -%}
 {% if ml is not none and ml.per_talk is not none -%}
-1発言あたり最大 {{ ml.per_talk }} 文字以内で出力してください。
+{{ _length_unit }}あたり最大 {{ ml.per_talk }} 文字以内で出力してください。
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
 ただし他エージェントへの @メンション (例: {{ mention_hint }}) を含む場合に限り, さらに {{ ml.mention_length }} 文字まで延長できます。
 {% endif -%}
 {% elif ml is not none and ml.base_length is not none -%}
-1発言あたり {{ ml.base_length }} 文字以内で出力してください。
+{{ _length_unit }}あたり {{ ml.base_length }} 文字以内で出力してください。
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
 ただし他エージェントへの @メンション (例: {{ mention_hint }}) を含める場合に限り, 追加で {{ ml.mention_length }} 文字まで書けます (合計最大 {{ ml.base_length + ml.mention_length }} 文字)。
 {% endif -%}
@@ -39,18 +44,24 @@
 {% if info is not none and info.remain_length is not none -%}
 本日の残り発言可能文字数は {{ info.remain_length }} 文字です。
 {% endif -%}
+{%- if _narration_split %}
+発話本文は必ず ``「...」`` で囲んで出力してください。``「」`` の外側にはキャラクターの仕草・視線・間合いなどのト書きを書いてよく (例: ``（少し間を置いて）``), サーバには ``「」`` 内側の文字列だけが連結されて送信されます。上記の文字数制限は ``「」`` 内側の合計に対してのみ適用され, ト書き部分は字数にカウントされません。台本で見た `### Turn 0` のような見出し・表・メタラベル (``〇日目``等)・`名前: 発話内容` の発話構造・他キャラのセリフ代弁・他キャラの心情ナレーションは, ``「」`` の内外どちらにも書かないでください。台本から学ぶのは議論の展開・発言のテンポ・キャラクターの口調であり, 形式ではありません。
+本日これ以上発言することが無い場合に限り、特別な制御トークンとして ``「Over」`` のみを出力してください。
+{%- else %}
 発言内容のみを出力してください。説明やメタ情報、前置きは含めないでください。
 台本で見た `### Turn 0` のような見出し、`| ID | 名前 |` のような表、「〇日目」「夜の行動」などのメタラベル、`名前: 発話内容` の発話構造、他キャラのセリフ代弁・ト書き (例:「(沈黙)」)・他キャラの心情ナレーションは出力に含めないでください (サーバ側で処理されるメタ要素および脚本家視点の地の文です)。台本から学ぶのは議論の展開・発言のテンポ・キャラクターの口調であり、形式ではありません。
 本日これ以上発言することが無い場合に限り、特別な制御トークンとして「Over」のみを出力してください。
+{%- endif %}
 {% elif request_key == 'whisper' -%}
 {%- set ml = (setting.whisper.max_length if setting is not none and setting.whisper is not none and setting.whisper.max_length is not none else none) -%}
+{%- set _length_unit = '「」内の囁き本文' if _narration_split else '1囁き' -%}
 {% if ml is not none and ml.per_talk is not none -%}
-1囁きあたり最大 {{ ml.per_talk }} 文字以内で出力してください。
+{{ _length_unit }}あたり最大 {{ ml.per_talk }} 文字以内で出力してください。
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
 ただし他エージェントへの @メンション (例: {{ mention_hint }}) を含む場合に限り, さらに {{ ml.mention_length }} 文字まで延長できます。
 {% endif -%}
 {% elif ml is not none and ml.base_length is not none -%}
-1囁きあたり {{ ml.base_length }} 文字以内で出力してください。
+{{ _length_unit }}あたり {{ ml.base_length }} 文字以内で出力してください。
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
 ただし他エージェントへの @メンション (例: {{ mention_hint }}) を含める場合に限り, 追加で {{ ml.mention_length }} 文字まで書けます (合計最大 {{ ml.base_length + ml.mention_length }} 文字)。
 {% endif -%}
@@ -58,9 +69,14 @@
 {% if info is not none and info.remain_length is not none -%}
 本日の残り囁き可能文字数は {{ info.remain_length }} 文字です。
 {% endif -%}
+{%- if _narration_split %}
+囁き本文は必ず ``「...」`` で囲んで出力してください。``「」`` の外側にはキャラクターの仕草・視線・間合いなどのト書きを書いてよく, サーバには ``「」`` 内側の文字列だけが連結されて送信されます。上記の文字数制限は ``「」`` 内側の合計に対してのみ適用され, ト書き部分は字数にカウントされません。台本で見た見出し・表・メタラベル・`名前: 発話内容` の発話構造・他キャラのセリフ代弁・他キャラの心情ナレーションは, ``「」`` の内外どちらにも書かないでください。
+本日これ以上囁くことが無い場合に限り、特別な制御トークンとして ``「Over」`` のみを出力してください。
+{%- else %}
 囁き内容のみを出力してください。説明やメタ情報、前置きは含めないでください。
 台本で見た見出し・表・メタラベル・`名前: 発話内容` の発話構造、他キャラのセリフ代弁・ト書き・他キャラの心情ナレーションは出力に含めないでください (サーバ側で処理されるメタ要素および脚本家視点の地の文です)。
 本日これ以上囁くことが無い場合に限り、特別な制御トークンとして「Over」のみを出力してください。
+{%- endif %}
 {% elif request_key in ['divine', 'guard', 'vote', 'attack'] -%}
 対象エージェント名のみを出力してください。説明・理由・記号・接頭辞は一切含めないでください。
 {% endif -%}

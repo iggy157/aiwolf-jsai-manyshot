@@ -2,23 +2,28 @@
 
 Agent / オフラインスクリプト (prewarm 等) の両方から使える LLM モデル生成ユーティリティ.
 config の provider セクション (openai / google / vertexai / ollama / anthropic) と
-ロール別 overrides (llm.talk / llm.action) を受け取り, LangChain の BaseChatModel インスタンスと
+ロール別 overrides (llm.talk / llm.action) を受け取り, LangChain の Runnable インスタンスと
 料金計算用メタ情報を返す.
 """
 
 from __future__ import annotations
 
 import os
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.runnables import RunnableLambda
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from utils.anthropic_cache import apply_cache_control
+
 if TYPE_CHECKING:
-    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import BaseMessage
+    from langchain_core.runnables import Runnable
 
 # llm.* / llm.talk.* / llm.action.* の中で「provider セクションを上書きする」設定.
 # これ以外のキーはロール制御用 (type, sleep_time, separate_langchain, talk, action) か
@@ -59,7 +64,7 @@ def build_llm_model(
     provider: str,
     provider_section: dict[str, Any],
     overrides: dict[str, Any] | None = None,
-) -> tuple[BaseChatModel, dict[str, str]]:
+) -> tuple[Runnable[Any, BaseMessage], dict[str, str]]:
     """Create an LLM model instance + cost metadata.
 
     Args:
@@ -68,8 +73,10 @@ def build_llm_model(
         overrides (dict[str, Any] | None): llm.*.<provider override keys> で上書きする項目.
 
     Returns:
-        tuple[BaseChatModel, dict[str, str]]: (LLM インスタンス, メタ辞書).
-            メタは {provider_key, model_id, pricing_mode} を持つ.
+        tuple[Runnable[Any, BaseMessage], dict[str, str]]: (LLM インスタンスまたは
+            ラップ済み Runnable, メタ辞書). メタは {provider_key, model_id, pricing_mode} を持つ.
+            anthropic で ``cache: true`` (default) のときは ``apply_cache_control`` を
+            前段に挟んだ ``RunnableSequence`` を返す.
     """
     section: dict[str, Any] = {**(provider_section or {}), **(overrides or {})}
     pricing_mode = str(section.get("pricing_mode", "standard"))
@@ -113,15 +120,18 @@ def build_llm_model(
                 meta,
             )
         case "anthropic":
-            return (
-                ChatAnthropic(
-                    model_name=model_id,
-                    temperature=float(section["temperature"]),
-                    timeout=None,
-                    stop=None,
-                    api_key=SecretStr(os.environ["ANTHROPIC_API_KEY"]),
-                ),
-                meta,
+            anthropic_model = ChatAnthropic(
+                model_name=model_id,
+                temperature=float(section["temperature"]),
+                timeout=None,
+                stop=None,
+                api_key=SecretStr(os.environ["ANTHROPIC_API_KEY"]),
             )
+            cache_enabled = bool(provider_section.get("cache", True))
+            cache_ttl = str(provider_section.get("cache_ttl", "5m"))
+            if not cache_enabled:
+                return (anthropic_model, meta)
+            cache_injector = RunnableLambda(partial(apply_cache_control, ttl=cache_ttl))
+            return (cache_injector | anthropic_model, meta)
         case _:
             raise ValueError(provider, "Unknown LLM type")
