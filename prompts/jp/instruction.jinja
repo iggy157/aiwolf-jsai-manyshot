@@ -1,12 +1,15 @@
 {#-
   instruction.jinja
-  リクエスト種別ごとの最低限の指示文. 出演者が台本を参考に自然に演じることを前提とする.
+  リクエスト種別ごとの最低限の指示文. 脚本家エージェントがお手本台本を参考に
+  担当キャラクターの次の一手を書くことを前提とする.
   Expects: request_key, info (optional)
 -#}
 {% if request_key == 'talk' -%}
-{{ info.day }}日目のトークです。お手本台本の議論運びや発言のテンポを参考に, あなたのキャラクターとして自然に発言してください。形式の模倣は不要です (発言内容のみを書くこと)。
+{%- set _self_talk_today = talk_history | selectattr('agent', 'equalto', info.agent) | selectattr('day', 'equalto', info.day) | list | length -%}
+{{ info.day }}日目のトークです。{% if _self_talk_today == 0 %}今が今日のあなたの最初の発言です。{% endif %}お手本台本の議論運びや発言のテンポを参考に, 担当キャラクターの口調で, 今この場面に合うセリフ本文を書いてください。台本記法 (キャラ名・見出し・表) や他キャラの代弁・ト書きは書かず, 担当キャラの発話本文のみを出力してください。
 {% elif request_key == 'whisper' -%}
-{{ info.day }}日目の囁きです。人狼仲間への囁きを, あなたのキャラクターの口調で自然に返してください。
+{%- set _self_whisper_today = whisper_history | selectattr('agent', 'equalto', info.agent) | selectattr('day', 'equalto', info.day) | list | length -%}
+{{ info.day }}日目の囁きです。{% if _self_whisper_today == 0 %}今が今日のあなたの最初の囁きです。{% endif %}人狼仲間への囁きを, 担当キャラクターの口調で, 今この場面に合う一発話だけ書いてください。
 {% elif request_key == 'divine' -%}
 占いリクエストです。占い対象のエージェント名のみを出力してください。
 {% elif request_key == 'guard' -%}
@@ -16,7 +19,7 @@
 {% elif request_key == 'attack' -%}
 襲撃リクエストです。襲撃対象のエージェント名のみを出力してください。
 {% elif request_key == 'initialize' -%}
-ゲーム開始です。先に読んだお手本台本と, 次に与えられるあなたの役・プロフィールを踏まえ, 以後のリクエストに日本語で応答してください。
+ゲーム開始です。先に読んだお手本台本と, 次に与えられる担当キャラクターの役・プロフィールを踏まえ, 以後のリクエストに日本語で応答してください。
 {% elif request_key == 'daily_initialize' -%}
 {{ info.day }}日目が始まりました。
 {% elif request_key == 'daily_finish' -%}

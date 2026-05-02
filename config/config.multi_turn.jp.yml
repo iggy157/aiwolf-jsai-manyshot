@@ -36,6 +36,13 @@
 #               ./data/scenario_cache/sample_games_<agent.num>/.
 scenario:
   enabled: true
+  # delivery: 'full' (既定, 後方互換) | 'by_day'
+  #   full   = 全 manyshot を全 day まとめて INITIALIZE で 1 回だけ feed.
+  #   by_day = INITIALIZE で各 manyshot の Day 0 部分 (役職配置 + 0日目章節) のみ feed,
+  #            以降は daily_initialize で当該日章節を継ぎ足す. 各日の覚書を Day 別キャッシュ
+  #            (cache key に day を含めて区別) として持つので, prewarm_scenario.py を
+  #            走らせると by_day モードのときは自動で全 day 分が prewarm される.
+  delivery: full
   ack_mode: llm_summary
   ack_static_text: "承知しました。台本を参考に、議論展開・発話のテンポ・キャラクターの口調を踏まえて演じます。"
   # --- キャッシュ設定 (ack_mode=llm_summary のとき有効) ---

@@ -70,8 +70,10 @@ class CostRecord:
 
 
 # OpenAI / Google はひとつの model_id に対し context_band / prompt_size_band で
-# 複数行を持つ. デフォルトは短コンテキスト側を採用する.
-_OPENAI_DEFAULT_CONTEXT_BAND = "short_context"
+# 複数行を持ちうる. デフォルトは短コンテキスト側を採用する.
+# OpenAI 側の context_band は実コンテキストサイズ表記 (32k / 128k / 400k / 1M / 1M+ /
+# unknown). 同一 (model_id, pricing_mode) に複数行ある場合は短い方を優先採用する.
+_OPENAI_CONTEXT_BAND_PRIORITY = ("32k", "128k", "400k", "1M", "1M+", "unknown")
 # prompt_size_band の優先順位. "all" があれば採用, なければ "<=200K" 相当.
 _GOOGLE_PROMPT_BAND_PRIORITY = ("all", "<=200K", "<=128K", "<=32K")
 # 非チャット用途のモデルは Agent のコスト計算からは除外する.
@@ -128,10 +130,11 @@ def load_pricing_table(
 def _load_openai_pricing(csv_path: Path) -> dict[tuple[str, str, str], PricingRow]:
     """Load data/model_cost/openai.csv.
 
-    同じ model_id に対し context_band が複数ある場合, 短コンテキスト (short_context) を
-    デフォルトとして採用する. 非チャット用途 (embeddings / image / tts など) はスキップ.
+    同じ (model_id, pricing_mode) に対し context_band が複数ある場合,
+    `_OPENAI_CONTEXT_BAND_PRIORITY` の順 (短コンテキスト優先) で代表行を1つ選ぶ.
+    非チャット用途 (embeddings / image / tts など) はスキップ.
     """
-    table: dict[tuple[str, str, str], PricingRow] = {}
+    buckets: dict[tuple[str, str], list[dict[str, str]]] = {}
     with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -140,27 +143,48 @@ def _load_openai_pricing(csv_path: Path) -> dict[tuple[str, str, str], PricingRo
                 continue
             model_id = (row.get("model_id") or "").strip()
             pricing_mode = (row.get("pricing_mode") or "").strip()
-            context_band = (row.get("context_band") or "").strip()
             if not model_id or not pricing_mode:
                 continue
-            if context_band and context_band != _OPENAI_DEFAULT_CONTEXT_BAND:
-                # 非デフォルトバンドはサフィックス付きで別キーに保持 (例: standard-long_context)
-                effective_mode = f"{pricing_mode}-{context_band}"
-            else:
-                effective_mode = pricing_mode
-            key = ("OpenAI", model_id, effective_mode)
-            table[key] = PricingRow(
-                provider="OpenAI",
-                model_id=model_id,
-                pricing_mode=effective_mode,
-                input_price_usd=_to_float(row.get("input_price_usd")),
-                cached_input_price_usd=_to_float(row.get("cached_input_price_usd")),
-                output_price_usd=_to_float(row.get("output_price_usd")),
-                thinking_support=(row.get("thinking_support") or "unknown").strip(),
-                status=(row.get("status") or "").strip(),
-                notes=(row.get("notes") or "").strip(),
-            )
+            # OpenAI CSV の pricing_mode 列は課金単位 (token / minute / hour ...) を表す.
+            # 本コードでは Anthropic/Google と揃えて "standard" / "batch" の意味で
+            # pricing_mode を扱うため, トークン課金は standard にマップする.
+            effective_mode = "standard" if pricing_mode == "token" else pricing_mode
+            buckets.setdefault((model_id, effective_mode), []).append(row)
+
+    table: dict[tuple[str, str, str], PricingRow] = {}
+    for (model_id, pricing_mode), rows in buckets.items():
+        chosen = _pick_openai_row(rows)
+        if chosen is None:
+            continue
+        table[("OpenAI", model_id, pricing_mode)] = PricingRow(
+            provider="OpenAI",
+            model_id=model_id,
+            pricing_mode=pricing_mode,
+            input_price_usd=_to_float(chosen.get("input_price_usd")),
+            cached_input_price_usd=_to_float(chosen.get("cached_input_price_usd")),
+            output_price_usd=_to_float(chosen.get("output_price_usd")),
+            thinking_support=(chosen.get("thinking_support") or "unknown").strip(),
+            status=(chosen.get("status") or "").strip(),
+            notes=(chosen.get("notes") or "").strip(),
+        )
     return table
+
+
+def _pick_openai_row(rows: list[dict[str, str]]) -> dict[str, str] | None:
+    """Pick a representative row by context_band priority (shortest first).
+
+    複数行候補から短コンテキスト優先で1つ選ぶ. 優先度不明の行は最低優先.
+    """
+    if not rows:
+        return None
+
+    def rank(r: dict[str, str]) -> int:
+        band = (r.get("context_band") or "").strip()
+        if band in _OPENAI_CONTEXT_BAND_PRIORITY:
+            return _OPENAI_CONTEXT_BAND_PRIORITY.index(band)
+        return len(_OPENAI_CONTEXT_BAND_PRIORITY) + 1
+
+    return sorted(rows, key=rank)[0]
 
 
 def _load_anthropic_pricing(csv_path: Path) -> dict[tuple[str, str, str], PricingRow]:
@@ -255,11 +279,13 @@ def _pick_google_row(rows: list[dict[str, str]]) -> dict[str, str] | None:
     """
     if not rows:
         return None
+
     def rank(r: dict[str, str]) -> int:
         band = (r.get("prompt_size_band") or "").strip()
         if band in _GOOGLE_PROMPT_BAND_PRIORITY:
             return _GOOGLE_PROMPT_BAND_PRIORITY.index(band)
         return len(_GOOGLE_PROMPT_BAND_PRIORITY) + 1
+
     return sorted(rows, key=rank)[0]
 
 

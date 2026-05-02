@@ -30,16 +30,25 @@ def compute_cache_key(  # noqa: PLR0913
     prompt_text: str,
     *,
     system_text: str = "",
+    day: int | None = None,
 ) -> str:
     """Compute a stable SHA-256 cache key from the render inputs.
 
     レンダリング入力に対する安定な SHA-256 キャッシュキーを計算する.
-    ``system_text`` が空文字列のときは旧仕様 (system 無し) と同じハッシュを返すため
-    既存キャッシュとの互換が保たれる.
+
+    互換ルール:
+        - ``system_text`` が空文字列, かつ ``day`` が None のときは旧仕様 (system / day 無し)
+          と同じハッシュを返す. 既存キャッシュ互換を維持.
+        - ``day`` を指定すると Day 別キャッシュとして別キーになる (by_day モード用).
+        - ``system_text`` を指定するとキャッシュキーに含まれる. 空文字なら旧挙動.
     """
     digest = hashlib.sha256()
     for part in (provider, model_id, lang, target_role):
         digest.update(part.encode("utf-8"))
+        digest.update(b"\0")
+    if day is not None:
+        digest.update(b"DAY:")
+        digest.update(str(day).encode("utf-8"))
         digest.update(b"\0")
     if system_text:
         digest.update(b"SYSTEM:")
@@ -65,8 +74,9 @@ class CacheEntry:
     response: str
     created_at: str
     system_text: str = ""
+    day: int | None = None  # by_day モードのときのみ. None なら full モード.
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int | None]:
         """Serialize to a dict suitable for JSON / JSON 出力用 dict に変換."""
         return {
             "provider": self.provider,
@@ -75,6 +85,7 @@ class CacheEntry:
             "target_role": self.target_role,
             "prompt_hash": self.prompt_hash,
             "system_text": self.system_text,
+            "day": self.day,
             "prompt": self.prompt,
             "response": self.response,
             "created_at": self.created_at,
@@ -94,16 +105,19 @@ def load_cached_response(  # noqa: PLR0913
     prompt_text: str,
     *,
     system_text: str = "",
+    day: int | None = None,
 ) -> str | None:
     """Return the cached response text for the given inputs, or None on miss.
 
     キャッシュに該当エントリがあれば応答テキストを返し, 無ければ None を返す.
     ``system_text`` を指定するとキャッシュキーに含まれる. 空文字なら旧挙動と互換.
+    ``day`` を指定すると Day 別キャッシュとして別キーになる (by_day モード用).
     """
     if not cache_dir.exists():
         return None
     key = compute_cache_key(
-        provider, model_id, lang, target_role, prompt_text, system_text=system_text,
+        provider, model_id, lang, target_role, prompt_text,
+        system_text=system_text, day=day,
     )
     path = _cache_path(cache_dir, key)
     if not path.exists():
@@ -129,15 +143,18 @@ def save_cache_entry(  # noqa: PLR0913
     response_text: str,
     *,
     system_text: str = "",
+    day: int | None = None,
 ) -> Path:
     """Persist a (prompt, response) pair under cache_dir keyed by SHA-256.
 
     (prompt, response) を cache_dir に SHA-256 キーで保存し, ファイルパスを返す.
     ``system_text`` を渡した場合はキャッシュキー計算とエントリ本文の双方に反映される.
+    ``day`` を渡すと Day 別キャッシュとして別キーになり, エントリ本文にも記録される.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = compute_cache_key(
-        provider, model_id, lang, target_role, prompt_text, system_text=system_text,
+        provider, model_id, lang, target_role, prompt_text,
+        system_text=system_text, day=day,
     )
     entry = CacheEntry(
         provider=provider,
@@ -149,6 +166,7 @@ def save_cache_entry(  # noqa: PLR0913
         response=response_text,
         created_at=datetime.now(UTC).isoformat(),
         system_text=system_text,
+        day=day,
     )
     path = _cache_path(cache_dir, key)
     with path.open("w", encoding="utf-8") as f:

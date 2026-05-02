@@ -1,16 +1,17 @@
 {#-
   identity.jinja
-  出演者 (プレイヤー役) としての自己情報.
-  このシステムでは複数のLLMがそれぞれ別の人物を演じ, お手本台本を参考に自然な人狼対局を繰り広げる.
+  脚本家エージェントが担当する1名のキャラクターの自己情報.
+  このシステムでは複数のLLMがそれぞれ別のキャラクターを担当し, お手本台本を参考に
+  自然な人狼対局の台本を書き上げる.
   - local_profile が注入されていれば (config.profile.source=local + 名前一致) 詳細な
     data/prompts/profiles.<lang>.yml のプロフィールを profile_encoding 順にリッチ描画する.
   - 無ければサーバ由来の info.profile 文字列にフォールバック.
   - どちらも無ければ名前と役職のみ.
   Expects: info, role, local_profile?, profile_encoding?
 -#}
-あなたはこの人狼対局の出演者の一人です。事前に読んだお手本台本を参考に, 自分のキャラクターを一貫して演じてください。
-あなたの名前: {{ info.agent }}
-あなたの役職: {{ role.value }}
+あなたはこの人狼対局を書き上げる脚本家チームの一人で, 下記キャラクターの一手分 (発話または判断) を書く担当です。事前に読んだお手本台本を参考に, 担当キャラクターの一貫した口調・立ち位置で次の一手を書いてください。
+担当キャラクターの名前: {{ info.agent }}
+担当キャラクターの役職: {{ role.value }}
 {% if local_profile -%}
 {%- set sep = "、" -%}
 {%- for field, label in profile_encoding.items() -%}
@@ -35,5 +36,5 @@
 {% endif -%}
 {%- endfor -%}
 {%- elif info.profile is not none -%}
-あなたのプロフィール: {{ info.profile }}
+担当キャラクターのプロフィール: {{ info.profile }}
 {% endif -%}

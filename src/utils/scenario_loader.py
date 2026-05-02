@@ -1,15 +1,22 @@
 """Load reference game scripts (markdown) and build the scenario prompt body.
 
 お手本対局の Markdown スクリプトを読み込み, 初期化時にLLMへ渡すプロンプト本文を組み立てる.
+
+scenario.delivery=by_day の場合は ``## N日目`` 見出しで本文を章節分割し, Day N の章節
+だけを抜き出して渡す API も提供する.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+# `## 0日目` `## 1日目` … 形式の見出しを行頭で検出. 数字の幅は 1 桁以上を許容.
+_DAY_HEADER_RE = re.compile(r"^## (\d+)日目\s*$", re.MULTILINE)
 
 
 def resolve_sample_dir(
@@ -118,3 +125,103 @@ def load_scenario_bodies(
         if text:
             bodies.append(text)
     return bodies
+
+
+def split_body_by_day(body: str) -> dict[int, str]:
+    """Split a manyshot body into ``{day: chunk}`` keyed by day number.
+
+    `## N日目` 見出し行を境界に Markdown 本文を章節分割する.
+    返却される chunk は見出し行を含み, 末尾の空白は除去される.
+
+    Args:
+        body (str): 元の Markdown 全文.
+
+    Returns:
+        dict[int, str]: day 番号 (int) → 当該日章節 (見出し含む) の dict.
+            見出しが 1 件も無ければ空 dict.
+    """
+    matches = list(_DAY_HEADER_RE.finditer(body))
+    if not matches:
+        return {}
+    chunks: dict[int, str] = {}
+    for i, m in enumerate(matches):
+        day = int(m.group(1))
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        chunks[day] = body[start:end].rstrip()
+    return chunks
+
+
+def extract_preamble(body: str) -> str:
+    """Return everything before the first ``## N日目`` header (typically ``## 役職配置``).
+
+    Args:
+        body (str): 元の Markdown 全文.
+
+    Returns:
+        str: 1 件目の day 見出しの直前までの文字列. day 見出しが無ければ全文.
+    """
+    m = _DAY_HEADER_RE.search(body)
+    if m is None:
+        return body.rstrip()
+    return body[: m.start()].rstrip()
+
+
+def load_scenario_bodies_by_day(
+    sample_dir: Path,
+    glob: str | list[str],
+    day: int,
+    *,
+    include_preamble: bool = False,
+) -> list[str]:
+    """Return per-script chunks for the specified day.
+
+    各 manyshot から指定 day の章節だけを抜き出して返す. ``include_preamble=True``
+    のときは各 manyshot の preamble (``## 役職配置`` ブロック等) を当該 chunk の
+    冒頭に prepend する (Day 0 を渡すときに役職構成を併せて見せたいときに使う).
+
+    Args:
+        sample_dir (Path): manyshot Markdown フォルダ.
+        glob (str | list[str]): ファイル glob.
+        day (int): 抜き出す day 番号 (0, 1, 2, ...).
+        include_preamble (bool): True のとき preamble を chunk 先頭に追加. 既定 False.
+
+    Returns:
+        list[str]: 抜粋 chunk のリスト (該当 day を含まない manyshot はスキップ).
+    """
+    full_bodies = load_scenario_bodies(sample_dir, glob)
+    chunks: list[str] = []
+    for body in full_bodies:
+        days = split_body_by_day(body)
+        chunk = days.get(day)
+        if chunk is None:
+            continue
+        if include_preamble:
+            preamble = extract_preamble(body)
+            if preamble:
+                chunk = f"{preamble}\n\n{chunk}"
+        chunks.append(chunk)
+    return chunks
+
+
+def discover_available_days(
+    sample_dir: Path,
+    glob: str | list[str],
+) -> list[int]:
+    """Return the sorted union of day numbers that appear in any manyshot under sample_dir.
+
+    全 manyshot を走査し, 出現した day 番号の和集合を昇順で返す. by_day モードで
+    prewarm すべき day を自動列挙するときに使う.
+
+    Args:
+        sample_dir (Path): manyshot Markdown フォルダ.
+        glob (str | list[str]): ファイル glob.
+
+    Returns:
+        list[int]: 昇順 day 番号 (空なら空 list).
+    """
+    full_bodies = load_scenario_bodies(sample_dir, glob)
+    days: set[int] = set()
+    for body in full_bodies:
+        days.update(split_body_by_day(body).keys())
+    return sorted(days)

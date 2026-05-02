@@ -27,6 +27,13 @@
 # (長文キャッシュ) が効く構成を推奨.
 scenario:
   enabled: true
+  # delivery: 'full' (既定, 後方互換) | 'by_day'
+  #   full   = 全 manyshot を全 day まとめて INITIALIZE で 1 回だけ feed (旧挙動).
+  #   by_day = INITIALIZE で各 manyshot の Day 0 部分 (役職配置 + 0日目章節) のみ feed,
+  #            以降は daily_initialize で当該日章節を継ぎ足す. 各日の覚書を Day 別キャッシュ
+  #            として持つ (キャッシュキーに day を含めて区別). prewarm_scenario.py は
+  #            by_day モードのとき全 day 分を自動で prewarm する.
+  delivery: full
   sample_dir: ./data/sample_games_md
   # glob: 単一パターン (文字列) またはパターンのリスト. リストの場合はマッチ結果をマージし
   # 重複パスを除外する. 読み込む台本を一部に絞りたいときはリストで範囲指定する.

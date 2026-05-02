@@ -30,6 +30,7 @@ from utils.profile_resolver import load_profile_data, resolve_profile
 from utils.scenario_cache import load_cached_response, save_cache_entry
 from utils.scenario_loader import (
     load_scenario_bodies,
+    load_scenario_bodies_by_day,
     resolve_cache_dir,
     resolve_prewarm_identity,
     resolve_sample_dir,
@@ -655,12 +656,18 @@ class Agent:
         self._feed_sample_games()
         self._send_message_to_llm(self.request)
 
-    def _feed_sample_games(self) -> None:  # noqa: C901, PLR0912, PLR0915
+    def _feed_sample_games(self) -> None:
         """Feed reference game scripts to the LLM as pre-initialize context.
 
         初期化プロンプト送信の前に, お手本台本を LLM に読ませる.
         multi-turn のときのみ llm_message_history に積む. single-turn 時はスキップ.
         separate_langchain=true の場合は talk/action 両系統に同じものを積む.
+
+        scenario.delivery:
+          - 'full' (既定, 後方互換): 全 manyshot を全 day まとめて 1 回フィード.
+          - 'by_day': Day 0 部分 (preamble + 0日目章節) のみをフィード.
+            Day 1 以降は daily_initialize() で _feed_sample_games_for_day(N) が
+            呼ばれて当該日章節を継ぎ足す.
 
         scenario.ack_mode:
           - 'llm_summary' (default): 事前 prewarm したキャッシュから LLM 応答を読み込み
@@ -677,20 +684,75 @@ class Agent:
         scenario_cfg = self.config.get("scenario") or {}
         if not bool(scenario_cfg.get("enabled", False)):
             return
+        delivery = str(scenario_cfg.get("delivery", "full"))
+        if delivery == "by_day":
+            self._feed_scenario_chunk(day=0, is_initial=True)
+        else:
+            self._feed_scenario_chunk(day=None, is_initial=True)
+
+    def _feed_sample_games_for_day(self, day: int) -> None:
+        """Feed Day N scenario chunk (by_day delivery only).
+
+        daily_initialize() から呼ばれる. delivery=by_day かつ day >= 1 のときだけ
+        当該日のお手本部分を llm_message_history に追加する. それ以外は no-op.
+        single-turn / scenario 無効化時 / Day 0 のときも no-op.
+        """
+        if self._is_single_turn():
+            return
+        scenario_cfg = self.config.get("scenario") or {}
+        if not bool(scenario_cfg.get("enabled", False)):
+            return
+        delivery = str(scenario_cfg.get("delivery", "full"))
+        if delivery != "by_day":
+            return
+        if day <= 0:
+            # Day 0 は INITIALIZE で既に feed 済み.
+            return
+        self._feed_scenario_chunk(day=day, is_initial=False)
+
+    def _feed_scenario_chunk(self, *, day: int | None, is_initial: bool) -> None:  # noqa: C901, PLR0912, PLR0915
+        """Render and append a scenario feed chunk into LLM history.
+
+        全 target (separate_langchain で talk/action, さもなくば default 1 つ) について
+        SystemMessage (初回のみ) + HumanMessage (台本 + 要約指示) + AIMessage (応答 / cache /
+        static) を順に積む. cache key は (provider, model, lang, target_role, prompt_text,
+        system_text, day) で計算され, 既存 (day=None) と by_day (day=int) で別々のキャッシュ
+        ファイルになる.
+
+        Args:
+            day: None なら full delivery (全 day まとめ → scenario.jinja).
+                 int なら by_day delivery の該当 day → scenario_daily.jinja.
+                 day=0 のときは preamble (## 役職配置) を chunk 先頭に含める.
+            is_initial: True ならセッション最初の feed で SystemMessage も積む.
+                        False なら SystemMessage はスキップ (既に履歴にある前提).
+        """
+        scenario_cfg = self.config.get("scenario") or {}
         project_root = Path(__file__).resolve().parent.parent.parent
         agent_cfg = self.config.get("agent") or {}
         sample_dir = resolve_sample_dir(scenario_cfg, agent_cfg, project_root)
-        # glob は単一文字列でも, リスト (複数パターンをマージ) でも可. 既定はフォルダ内全 .md.
         glob_cfg = scenario_cfg.get("glob", "*.md")
         glob: str | list[str] = (
             list(glob_cfg) if isinstance(glob_cfg, (list, tuple)) else str(glob_cfg)
         )
-        bodies = load_scenario_bodies(sample_dir, glob)
+
+        if day is None:
+            # full delivery: 全 manyshot を全 day まとめて
+            bodies = load_scenario_bodies(sample_dir, glob)
+            template_name = "scenario.jinja"
+            log_phase = "SCENARIO"
+        else:
+            # by_day delivery: 該当 day の章節だけ. Day 0 は preamble 込み.
+            bodies = load_scenario_bodies_by_day(
+                sample_dir, glob, day, include_preamble=(day == 0),
+            )
+            template_name = "scenario_daily.jinja"
+            log_phase = f"SCENARIO_DAY{day}"
+
         if not bodies:
             self.agent_logger.logger.warning(
-                "scenario enabled but no scripts found at %s (glob=%s)",
-                sample_dir,
-                glob,
+                "scenario %s but no bodies found at %s (glob=%s, day=%s)",
+                "by_day enabled" if day is not None else "enabled",
+                sample_dir, glob, day,
             )
             return
 
@@ -701,8 +763,8 @@ class Agent:
 
         lang = str(self.config.get("lang", "jp"))
         env = _get_jinja_env(lang)
-        template = env.get_template("scenario.jinja")
-        system_template = env.get_template("scenario_system.jinja")
+        template = env.get_template(template_name)
+        system_template = env.get_template("scenario_system.jinja") if is_initial else None
 
         static_ack = str(scenario_cfg.get(
             "ack_static_text",
@@ -710,7 +772,6 @@ class Agent:
         ))
 
         # separate_langchain の場合は talk と action の両方に積む. そうでない場合は default のみ.
-        # target_role は scenario.jinja で要約観点 (発話運び vs アクション判断) を分岐するためのキー.
         if self._is_separate_langchain():
             targets: list[tuple[BaseChatModel | None, list[BaseMessage], str, dict[str, str] | None]] = [
                 (self.llm_model_talk, self.llm_message_history_talk, "talk", self.llm_meta_talk),
@@ -720,51 +781,38 @@ class Agent:
             targets = [(self.llm_model, self.llm_message_history, "default", self.llm_meta_default)]
 
         for model, history, label, meta in targets:
-            # 1. SystemMessage: 本番出力時の運用ルール (target_role 別).
-            #    形式の禁止事項などはこちら側に集約し, scenario.jinja は台本提示と要約指示に集中させる.
-            system_text = system_template.render(target_role=label).strip()
-            history.append(SystemMessage(content=system_text))
-            self.agent_logger.logger.info(
-                [
-                    "SCENARIO",
-                    "system",
-                    label,
-                    f"chars={len(system_text)}",
-                    system_text,
-                ],
-            )
+            # 1. SystemMessage (初回 feed のみ). 後続 feed では既に履歴に存在.
+            system_text = ""
+            if is_initial and system_template is not None:
+                system_text = system_template.render(target_role=label).strip()
+                history.append(SystemMessage(content=system_text))
+                self.agent_logger.logger.info(
+                    [log_phase, "system", label, f"chars={len(system_text)}", system_text],
+                )
+
             # 2. HumanMessage: 台本 + 要約指示.
-            #    agent_num は scenario.jinja の action 観点を 5p / 9p で切り替えるために渡す.
-            prompt = template.render(
-                scenario_bodies=bodies,
-                scenario_count=len(bodies),
-                ack_mode=ack_mode,
-                target_role=label,
-                agent_num=agent_cfg.get("num"),
-                headings=self.config.get("headings") or {},
-            ).strip()
+            render_kwargs: dict[str, Any] = {
+                "scenario_bodies": bodies,
+                "scenario_count": len(bodies),
+                "ack_mode": ack_mode,
+                "target_role": label,
+                "agent_num": agent_cfg.get("num"),
+                "headings": self.config.get("headings") or {},
+            }
+            if day is not None:
+                render_kwargs["day"] = day
+            prompt = template.render(**render_kwargs).strip()
             history.append(HumanMessage(content=prompt))
-            # 送信した HumanMessage (台本本文込み) を記録. 診断時に台本が実際に渡ったか確認できる.
             self.agent_logger.logger.info(
-                [
-                    "SCENARIO",
-                    "prompt",
-                    label,
-                    f"count={len(bodies)}",
-                    f"ack_mode={ack_mode}",
-                    f"chars={len(prompt)}",
-                    prompt,
-                ],
+                [log_phase, "prompt", label, f"count={len(bodies)}",
+                 f"ack_mode={ack_mode}", f"chars={len(prompt)}", prompt],
             )
             if ack_mode == "static":
                 history.append(AIMessage(content=static_ack))
-                self.agent_logger.logger.info(
-                    ["SCENARIO", "ack", label, "static", static_ack],
-                )
+                self.agent_logger.logger.info([log_phase, "ack", label, "static", static_ack])
                 continue
 
-            # cache key の (provider, model). scenario.prewarm.<label> があればそちらを優先.
-            # (なければ runtime の meta から).
+            # 3. cache key の (provider, model). scenario.prewarm.<label> があればそちらを優先.
             prewarm_identity = resolve_prewarm_identity(label, scenario_cfg)
             if prewarm_identity is not None:
                 cache_provider, cache_model_id = prewarm_identity
@@ -773,51 +821,39 @@ class Agent:
             else:
                 cache_provider, cache_model_id = "", ""
 
-            # ack_mode = llm_summary: キャッシュヒットを優先. prewarm 済みなら LLM 呼び出しはゼロで完了する.
+            # 4. cache 読み込み. day を含めるので by_day と full のキャッシュは独立.
             cached_response: str | None = None
             if use_cache and (prewarm_identity is not None or meta is not None):
                 cached_response = load_cached_response(
-                    cache_dir,
-                    cache_provider,
-                    cache_model_id,
-                    lang,
-                    label,
-                    prompt,
-                    system_text=system_text,
+                    cache_dir, cache_provider, cache_model_id, lang, label, prompt,
+                    system_text=system_text, day=day,
                 )
             if cached_response is not None:
                 history.append(AIMessage(content=cached_response))
                 self.agent_logger.logger.info(
-                    ["SCENARIO", "ack", label, "cache_hit", cached_response],
+                    [log_phase, "ack", label, "cache_hit", cached_response],
                 )
                 continue
 
-            # キャッシュミス.
+            # 5. キャッシュミス.
             if on_cache_miss == "error":
                 msg = (
-                    f"Scenario cache miss for target_role={label}, "
-                    f"provider={cache_provider or '?'}, "
-                    f"model={cache_model_id or '?'}. "
+                    f"Scenario cache miss for target_role={label}, day={day}, "
+                    f"provider={cache_provider or '?'}, model={cache_model_id or '?'}. "
                     "Run `uv run scripts/prewarm_scenario.py` or set scenario.on_cache_miss to "
                     "'static' / 'live'."
                 )
                 self.agent_logger.logger.error(msg)
                 raise RuntimeError(msg)
             if on_cache_miss != "live" or model is None:
-                # 既定 (static): LLM を呼ばず静的 ack にフォールバック. タイムアウト安全.
                 history.append(AIMessage(content=static_ack))
                 self.agent_logger.logger.warning(
-                    [
-                        "SCENARIO",
-                        "ack",
-                        label,
-                        "cache_miss_static_fallback",
-                        "run prewarm_scenario.py to populate cache",
-                        static_ack,
-                    ],
+                    [log_phase, "ack", label, "cache_miss_static_fallback",
+                     "run prewarm_scenario.py to populate cache", static_ack],
                 )
                 continue
-            # on_cache_miss == 'live': 実行時に LLM を呼び, 得られた結果をキャッシュにも保存.
+
+            # 6. on_cache_miss == 'live': 実行時に LLM を呼び, 結果をキャッシュにも保存.
             try:
                 ai = model.invoke(history)
                 history.append(ai)
@@ -826,37 +862,35 @@ class Agent:
                 if use_cache and (prewarm_identity is not None or meta is not None):
                     try:
                         saved_path = save_cache_entry(
-                            cache_dir,
-                            cache_provider,
-                            cache_model_id,
-                            lang,
-                            label,
-                            prompt,
-                            response,
-                            system_text=system_text,
+                            cache_dir, cache_provider, cache_model_id, lang, label,
+                            prompt, response, system_text=system_text, day=day,
                         )
                         self.agent_logger.logger.info(
-                            ["SCENARIO", "cache_saved", label, str(saved_path)],
+                            [log_phase, "cache_saved", label, str(saved_path)],
                         )
                     except OSError:
                         self.agent_logger.logger.exception(
                             "Failed to save scenario cache entry",
                         )
                 self.agent_logger.logger.info(
-                    ["SCENARIO", "ack", label, "live_llm_summary", response],
+                    [log_phase, "ack", label, "live_llm_summary", response],
                 )
             except Exception:
                 self.agent_logger.logger.exception("Failed to feed scenario to LLM (%s)", label)
                 history.append(AIMessage(content=static_ack))
                 self.agent_logger.logger.warning(
-                    ["SCENARIO", "ack", label, "static_fallback_on_error", static_ack],
+                    [log_phase, "ack", label, "static_fallback_on_error", static_ack],
                 )
 
     def daily_initialize(self) -> None:
         """Perform processing for daily initialization request.
 
         昼開始リクエストに対する処理を行う.
+        scenario.delivery=by_day かつ Day >= 1 のときは, 当該日のお手本部分を
+        llm_message_history に追加してから daily_initialize プロンプトを送る.
         """
+        if self.info is not None:
+            self._feed_sample_games_for_day(self.info.day)
         self._send_message_to_llm(self.request)
 
     def whisper(self) -> str:
