@@ -249,6 +249,43 @@ class Agent:
         """
         return is_freeform_enabled(self.config.get("agent") or {})
 
+    def _compute_talk_state(self) -> dict[str, int] | None:
+        """Return today's own talk state (count / remain / total) for prompt display.
+
+        本日のトークの進行状況を集計する. ``constraints.jinja`` で表示し, LLM に
+        「今日 N 回発話済み, 残り K 回」「今日のトーク全体は L 発話進行中」を伝える
+        ことで, 最終 Turn 近くで投票宣言フェーズへ移行する判断材料とする.
+
+        freeform フラグに依存せず常に計算する (request/response 仕様サーバでも
+        同様の問題 = 議論が投票宣言まで到達しない, が起きるため).
+
+        トーク履歴は ``self.talk_history`` (Agent が packet から積み上げた list[Talk]).
+        Info packet 自体には talk_history 属性は無いので注意.
+
+        Returns:
+            dict[str, int] | None: ``max_count``, ``own_count``, ``own_remain``,
+                ``total_today`` を持つ辞書. 設定が取れない時は None.
+        """
+        info = self.info
+        setting = self.setting
+        if info is None or setting is None:
+            return None
+        max_count_obj = getattr(getattr(setting, "talk", None), "max_count", None)
+        max_count = getattr(max_count_obj, "per_agent", None) if max_count_obj is not None else None
+        if not isinstance(max_count, int) or max_count <= 0:
+            return None
+        today = info.day
+        own = info.agent
+        history = self.talk_history or []
+        own_count = sum(1 for t in history if t.day == today and t.agent == own)
+        total = sum(1 for t in history if t.day == today)
+        return {
+            "max_count": max_count,
+            "own_count": own_count,
+            "own_remain": max(0, max_count - own_count),
+            "total_today": total,
+        }
+
     def _compute_remain_talk_map(self) -> dict[str, int] | None:
         """Compute today's remaining talk count per agent for freeform mode.
 
@@ -276,7 +313,9 @@ class Agent:
             return None
         counts: dict[str, int] = dict.fromkeys(status_map, 0)
         today = info.day
-        for talk in info.talk_history or []:
+        # ``self.talk_history`` (Agent が packet から積み上げた list[Talk]) を使う.
+        # ``Info`` packet 自体には talk_history 属性がないため注意.
+        for talk in self.talk_history or []:
             if talk.day != today:
                 continue
             if talk.agent in counts:
@@ -424,18 +463,40 @@ class Agent:
         """
         return text.strip().upper() == "[PASS]"
 
+    def _initial_freeform_stagger_seconds(self) -> float:
+        """Return a deterministic 0〜3 sec offset for spreading first wake-ups.
+
+        ``agent_name`` 基準で決定論的に 0〜3 秒のオフセットを返す.
+        全エージェントが同時刻に TALK_PHASE_START を受信すると, 初回 LLM コールが
+        ほぼ並列に走って全員が空の talk_history で「Day 開幕セリフ」を独立生成し,
+        結果として並列 monoculture (全員 "CO お願い" 等) が起きる.
+        初回ウェイクアップを散らすことで, 早い人の broadcast を遅い人が取り込んで
+        から発話判断する流れを作る.
+
+        Returns:
+            float: 0〜3 秒のオフセット (agent_name から決定論的に算出).
+        """
+        # ``hash`` の結果は PYTHONHASHSEED に依存するが, 各エージェントは spawn された
+        # 別プロセスなので分散性のみ確保できれば十分 (再現性は不要).
+        bucket = abs(hash(self.agent_name)) % 1000
+        return (bucket / 1000.0) * 3.0
+
     async def handle_talk_phase(self, send: Callable[[str], None]) -> None:
         """Handle talk phase in freeform mode.
 
         グループチャット方式でのトークフェーズ処理.
-        ``agent.freeform`` が True のとき, LLM が ``[PASS]`` を返したら送信せず
-        短い再試行間隔で次サイクルへ進む. 通常の発話間隔にも微小ジッタを加えて
-        全エージェントの同時ウェイクアップを徐々にずらす.
+        ``agent.freeform`` が True のとき:
+          - 初回 LLM コール前に 0〜3 秒の決定論的 stagger を入れて全エージェントの
+            同時ウェイクアップを散らす (並列 race condition 回避).
+          - LLM が ``[PASS]`` を返したら送信せず短い再試行間隔で次サイクルへ進む.
+          - 通常の発話間隔にも微小ジッタを加える.
 
         Args:
             send (Callable[[str], None]): Send function / 送信関数
         """
         freeform = self._is_freeform()
+        if freeform:
+            await asyncio.sleep(self._initial_freeform_stagger_seconds())
         while self.in_talk_phase:
             if self.info and self.info.remain_count is not None and self.info.remain_count <= 0:
                 break
@@ -454,12 +515,14 @@ class Agent:
         """Handle whisper phase in freeform mode.
 
         グループチャット方式での囁きフェーズ処理. 挙動は ``handle_talk_phase`` と同じ
-        (freeform=true で ``[PASS]`` 検出 + 微小ジッタ).
+        (freeform=true で初回 stagger + ``[PASS]`` 検出 + 微小ジッタ).
 
         Args:
             send (Callable[[str], None]): Send function / 送信関数
         """
         freeform = self._is_freeform()
+        if freeform:
+            await asyncio.sleep(self._initial_freeform_stagger_seconds())
         while self.in_whisper_phase:
             if self.info and self.info.remain_count is not None and self.info.remain_count <= 0:
                 break
@@ -678,6 +741,7 @@ class Agent:
             "narration_split": self._is_narration_split(),
             "freeform": self._is_freeform(),
             "remain_talk_map": self._compute_remain_talk_map() if self._is_freeform() else None,
+            "talk_state": self._compute_talk_state() if request_key in {"talk", "whisper"} else None,
         }
         env = _get_jinja_env(lang)
         template = env.from_string(prompt)

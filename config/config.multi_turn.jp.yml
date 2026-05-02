@@ -86,10 +86,10 @@ llm:
   # 同じ会社の異なるモデルを talk と action で使い分けたい場合はここに model を書く.
   # type を省略した場合は llm.type をデフォルトとして使う.
   talk:
-    type: anthropic
-    model: claude-sonnet-4-6
-    # type: openai
-    # model: gpt-5.2
+    # type: anthropic
+    # model: claude-sonnet-4-6
+    type: openai
+    model: gpt-5.2
   action:
     type: openai
     model: gpt-4o-mini         # openai + gpt-4o-mini (action は軽量モデル)
@@ -140,19 +140,31 @@ prompt:
   #         prewarm を再実行する必要あり, または on_cache_miss=static で fallback 動作).
   narration_split: false
 
+  # 共通リクエスト (initialize / daily_initialize / daily_finish) はゲーム状態の
+  # コンテキストを LLM に積むためのもので, 役のセリフを生成させてはいけない.
+  # in-character の発話を生成すると llm_message_history に AIMessage として残り,
+  # 後続の talk_phase で LLM が「自分が前のターンで言ったこと」として参照してしまう
+  # (= talk 開始時に空の履歴なのに「賛成です」など脈絡のない応答が起きる).
+  # 全ての shared リクエスト末尾で 「了解しました」 のみを返すよう明示する.
   initialize: |-
     {{ block('identity') }}
     {{ block('instruction') }}
     以降のリクエストには日本語で応答してください。レスポンスはそのままゲームに送信されるため, 不要な情報を含めないでください。
+
+    これはセットアップメッセージです。**役のセリフを生成せず**, 「了解しました」とだけ返してください。実際の発話は後続の talk / whisper リクエストで行います。
   daily_initialize: |-
     {{ block('instruction') }}
     {{ block('event') }}
+
+    これは日付開始の通知です。**役のセリフを生成せず**, 「了解しました」とだけ返してください。実際の発話は後続の talk / whisper リクエストで行います。
   daily_finish: |-
     {{ block('instruction') }}
     {{ block('event') }}
     {% set history_source = talk_history -%}
     {% set history_start = sent_talk_count -%}
     {{ block('history') }}
+
+    これは日付終了の通知です。**役のセリフ・感想・反省を生成せず**, 「了解しました」とだけ返してください。実際の発話は次の日の talk / whisper リクエストで行います。
   talk: |-
     {% set history_source = talk_history -%}
     {% set history_start = sent_talk_count -%}

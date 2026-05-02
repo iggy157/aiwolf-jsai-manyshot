@@ -20,10 +20,15 @@
   freeform=True のときは, グループチャット方式で「今は自分のターンか」を判断させ,
   ``[PASS]`` 制御トークンの利用と各エージェントの残り発話回数 (remain_talk_map) を
   踏まえた振る舞いを促す指示を追加する. 既存の発話制約と併存して LLM に渡る.
+
+  talk_state (dict, optional) はトークリクエスト時の本日のトーク進行状況
+  (max_count / own_count / own_remain / total_today). freeform に依存せず常に
+  表示する (Day 末で投票宣言フェーズへ移行する判断材料として).
 -#}
 {%- set _narration_split = narration_split if narration_split is defined else False -%}
 {%- set _freeform = freeform if freeform is defined else False -%}
 {%- set _remain_map = remain_talk_map if remain_talk_map is defined else none -%}
+{%- set _talk_state = talk_state if talk_state is defined else none -%}
 {%- set mention_ns = namespace(example=none) -%}
 {%- if info is not none and info.status_map is not none -%}
 {%- for name in info.status_map -%}
@@ -49,6 +54,14 @@
 {% endif -%}
 {% if info is not none and info.remain_length is not none -%}
 本日の残り発言可能文字数は {{ info.remain_length }} 文字です。
+{% endif -%}
+{%- if _talk_state is not none %}
+本日のあなたの発話状況: 既に {{ _talk_state.own_count }} 回発話済み (上限 {{ _talk_state.max_count }} 回), 残り {{ _talk_state.own_remain }} 回。今日のトーク全体は {{ _talk_state.total_today }} 発話進行中。
+{% if _talk_state.own_remain <= 1 -%}
+[残り発話 1 回以下] 議論を続けるよりも, **投票先を ``@-mention`` 付きで明確に宣言**して締める局面です (例: 「@〇〇さんに投票します」「@〇〇に入れる」)。台本上, 最終 Turn は全員が投票宣言で終わるのが典型です。
+{%- elif _talk_state.own_remain <= 2 -%}
+[残り発話 2 回] 終盤に近づいています。投票先の明確化を意識してください。
+{%- endif %}
 {% endif -%}
 {%- if _narration_split %}
 発話本文は必ず ``「...」`` で囲んで出力してください。``「」`` の外側にはキャラクターの仕草・視線・間合いなどのト書きを書いてよく (例: ``（少し間を置いて）``), サーバには ``「」`` 内側の文字列だけが連結されて送信されます。上記の文字数制限は ``「」`` 内側の合計に対してのみ適用され, ト書き部分は字数にカウントされません。台本で見た `### Turn 0` のような見出し・表・メタラベル (``〇日目``等)・`名前: 発話内容` の発話構造・他キャラのセリフ代弁・他キャラの心情ナレーションは, ``「」`` の内外どちらにも書かないでください。台本から学ぶのは議論の展開・発言のテンポ・キャラクターの口調であり, 形式ではありません。
