@@ -22,9 +22,13 @@
     target_role ('talk' | 'action' | 'default')
     mechanics (dict[str, bool], optional)
     agent_num (int, optional)
+    freeform (bool, optional, default False)
+      True のとき talk 系の Day 別分析に「次発話者の選ばれ方」「残り発話回数を踏まえた振る舞い」
+      の観察項目を追加する. cache 自体は別ディレクトリ (sample_games_<N>_freeform/) に保存される.
 -#}
 {%- set _has_whisper = mechanics.has_whisper if mechanics is defined else True -%}
 {%- set _has_bodyguard = mechanics.has_bodyguard if mechanics is defined else True -%}
+{%- set _freeform = freeform if freeform is defined else False -%}
 {%- set _talk_role = 'トーク' + ('・囁き' if _has_whisper else '') -%}
 {%- set _action_list = '投票・占い' + ('・護衛' if _has_bodyguard else '') + '・襲撃' -%}
 {% if day == 0 -%}
@@ -59,6 +63,10 @@
 - Day {{ day }} の中で議題が切り替わる **自然な節目** と、どんな盤面状況がどんな話題・口調を呼んでいるか。「なぜその発話が出ているか」を捉える観点で書くと、形式の暗記にならずに済みます。
 - **応答の散らばり方**: 同じ議題への応答が、台本中で「賛同 (簡潔)」「賛同 + 補足」「別観点」「中立観察」「スキップ」のように役割が散る様子。担当キャラの性格に沿った役割を選ぶ感覚。
 - **主流から外れる位置取り**: 誰かが攻められている局面で、攻める側だけでなく **非を認める・中立観察・整理役・保留** がどんな状況条件で出ているか。攻める vs 攻められるの 2 元論にならないことが自然さの源です。
+{% if _freeform -%}
+- **次発話者の選ばれ方** (Day {{ day }} の流れの中で): 名指し / 直接質問 / CO 直後 / 整理役による戻し など、誰が次にバトンを受け取るかの自然な渡り方を 2〜3 件抜き出してください。
+- **残り発話回数を踏まえた振る舞い**: Day {{ day }} の進行中で、他キャラの残り回数を意識した質問の振り方、Over したキャラへの不毛な要求を避ける動き、自分の残り回数の温存判断などを観察してください。
+{% endif -%}
 
 これらは Day {{ day }} の台本に観察された一例で, 状況が変われば別の流れ・別の役割の取り方も起こりうる前提です。
 {% else -%}

@@ -37,6 +37,16 @@ agent:
   num: 5
   team: yharada
   kill_on_timeout: true
+  # freeform 仕様 (グループチャット方式; サーバが TALK_PHASE_START/END を送る) に最適化した
+  # 挙動を有効にするか.
+  #   true: scenario cache が ``sample_games_<num>_freeform/`` 配下を参照. 分析プロンプトに
+  #         「次発話者の選ばれ方」「残り発話回数を踏まえた振る舞い」観点が追加される. constraints
+  #         プロンプトに ``[PASS]`` 制御トークン + 残り発話回数マップが表示される.
+  #         handle_talk_phase / handle_whisper_phase が ``[PASS]`` を検出したら送信せず微小ジッタで
+  #         次サイクルへ進む. (1局あたり 1 LLM コール / cycle は変わらない).
+  #   false (default): 旧来挙動 (毎ターン必ず talk; cache は ``sample_games_<num>/``).
+  #         サーバが request/response 仕様, または freeform サーバへ繋いでもフォールバックで動かしたい時.
+  freeform: false
 
 log:
   console_output: true

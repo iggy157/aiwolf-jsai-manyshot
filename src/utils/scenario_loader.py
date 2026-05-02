@@ -98,6 +98,16 @@ def resolve_prewarm_identity(
     return None
 
 
+def is_freeform_enabled(agent_cfg: dict[str, Any]) -> bool:
+    """Return whether ``agent.freeform`` is enabled.
+
+    config の ``agent.freeform`` を真偽値として読む. 未指定なら False.
+    True のときはキャッシュ・プロンプト・ランタイムが freeform 仕様 (グループチャット
+    方式に最適化された次発話者判断・残り発話回数考慮の挙動) に切り替わる.
+    """
+    return bool(agent_cfg.get("freeform", False))
+
+
 def resolve_cache_dir(
     scenario_cfg: dict[str, Any],
     agent_cfg: dict[str, Any],
@@ -105,18 +115,20 @@ def resolve_cache_dir(
 ) -> Path:
     """Resolve the scenario prewarm-cache directory for the current agent count.
 
-    起動エージェント数に応じたキャッシュフォルダを解決する.
+    起動エージェント数と freeform フラグに応じたキャッシュフォルダを解決する.
 
     解決ルール:
         1. ``scenario.cache_dir`` が明示指定されていればそれを尊重 (絶対化のみ).
-        2. 未指定なら ``./data/scenario_cache/sample_games_<agent.num>`` を採用.
+        2. 未指定なら ``./data/scenario_cache/sample_games_<agent.num>``
+           (``agent.freeform: true`` のときは ``sample_games_<num>_freeform``) を採用.
     """
     explicit = scenario_cfg.get("cache_dir")
     if explicit:
         path = Path(str(explicit))
     else:
         agent_num = int(agent_cfg.get("num", 5))
-        path = Path("./data/scenario_cache") / f"sample_games_{agent_num}"
+        suffix = "_freeform" if is_freeform_enabled(agent_cfg) else ""
+        path = Path("./data/scenario_cache") / f"sample_games_{agent_num}{suffix}"
     if not path.is_absolute():
         path = (project_root / path).resolve()
     return path

@@ -1,7 +1,7 @@
 {#-
   constraints.jinja
   出力形式 (request_key 別) と文字数制限 (サーバ setting / info から動的取得) を表示.
-  Expects: request_key, setting?, info?, narration_split?
+  Expects: request_key, setting?, info?, narration_split?, freeform?, remain_talk_map?
 
   サーバの文字数制限モデル (aiwolf-nlp-server):
     - per_talk:       1発言あたりの絶対上限 (値が -1 のとき packet から omit される → None)
@@ -16,8 +16,14 @@
 
   narration_split=True のときは, 発話本文を ``「...」`` で囲ませてト書きを外側に書く
   モード. 文字数制限は ``「」`` 内側の合計のみに適用される旨を LLM に伝える.
+
+  freeform=True のときは, グループチャット方式で「今は自分のターンか」を判断させ,
+  ``[PASS]`` 制御トークンの利用と各エージェントの残り発話回数 (remain_talk_map) を
+  踏まえた振る舞いを促す指示を追加する. 既存の発話制約と併存して LLM に渡る.
 -#}
 {%- set _narration_split = narration_split if narration_split is defined else False -%}
+{%- set _freeform = freeform if freeform is defined else False -%}
+{%- set _remain_map = remain_talk_map if remain_talk_map is defined else none -%}
 {%- set mention_ns = namespace(example=none) -%}
 {%- if info is not none and info.status_map is not none -%}
 {%- for name in info.status_map -%}
@@ -52,6 +58,26 @@
 台本で見た `### Turn 0` のような見出し、`| ID | 名前 |` のような表、「〇日目」「夜の行動」などのメタラベル、`名前: 発話内容` の発話構造、他キャラのセリフ代弁・ト書き (例:「(沈黙)」)・他キャラの心情ナレーションは出力に含めないでください (サーバ側で処理されるメタ要素および脚本家視点の地の文です)。台本から学ぶのは議論の展開・発言のテンポ・キャラクターの口調であり、形式ではありません。
 本日これ以上発言することが無い場合に限り、特別な制御トークンとして「Over」のみを出力してください。
 {%- endif %}
+{%- if _freeform %}
+
+【freeform モード: 次発話者判断】
+{% if _remain_map -%}
+本日の各エージェントの残り発話可能回数:
+{% for name, remain in _remain_map.items() -%}
+{% if remain <= 0 %}- {{ name }}: Over (発話済み・応答不可)
+{% else %}- {{ name }}: 残り {{ remain }} 回
+{% endif -%}
+{%- endfor %}
+{% endif -%}
+直前の流れと残り発話回数を踏まえ, 今あなたが発話するのが自然か判断してください. 次のいずれかに該当する場合は ``[PASS]`` のみを出力してください (空発話扱いで送信されません):
+- 直前で他キャラが名指し / 直接質問された → 名指し相手 (= 自分でない) の応答待ち
+- 自分が直前のターンで発話済みで, 追加すべき新論点が無い
+- Over したキャラへの応答を求められている (誰も応えられない不毛な往復になる)
+- 同じ趣旨を繰り返すだけになりそう
+- 残り発話回数を温存したい (核心議題まで取っておきたい)
+
+それ以外は普段通り発話してください. 沈黙が続く / あなたが質問された / CO 直後の補足が必要 などの状況では積極的に発話してください.
+{%- endif %}
 {% elif request_key == 'whisper' -%}
 {%- set ml = (setting.whisper.max_length if setting is not none and setting.whisper is not none and setting.whisper.max_length is not none else none) -%}
 {%- set _length_unit = '「」内の囁き本文' if _narration_split else '1囁き' -%}
@@ -76,6 +102,17 @@
 囁き内容のみを出力してください。説明やメタ情報、前置きは含めないでください。
 台本で見た見出し・表・メタラベル・`名前: 発話内容` の発話構造、他キャラのセリフ代弁・ト書き・他キャラの心情ナレーションは出力に含めないでください (サーバ側で処理されるメタ要素および脚本家視点の地の文です)。
 本日これ以上囁くことが無い場合に限り、特別な制御トークンとして「Over」のみを出力してください。
+{%- endif %}
+{%- if _freeform %}
+
+【freeform モード: 次発話者判断】
+直前の囁きの流れを踏まえ, 今あなたが囁くのが自然か判断してください. 次のいずれかに該当する場合は ``[PASS]`` のみを出力してください (空囁き扱いで送信されません):
+- 直前で他の人狼が問いかけた相手が自分でない → 相手の応答待ち
+- 自分が直前のターンで囁き済みで, 追加すべき新論点が無い
+- 同じ趣旨を繰り返すだけになりそう
+- 囁き回数を温存したい局面
+
+それ以外は普段通り囁いてください.
 {%- endif %}
 {% elif request_key in ['divine', 'guard', 'vote', 'attack'] -%}
 対象エージェント名のみを出力してください。説明・理由・記号・接頭辞は一切含めないでください。

@@ -32,6 +32,7 @@ from utils.profile_resolver import load_profile_data, resolve_profile
 from utils.scenario_cache import load_cached_response, save_cache_entry
 from utils.scenario_loader import (
     derive_mechanics_flags,
+    is_freeform_enabled,
     load_scenario_bodies,
     load_scenario_bodies_by_day,
     resolve_cache_dir,
@@ -229,6 +230,63 @@ class Agent:
         prompt_cfg = self.config.get("prompt") or {}
         return bool(prompt_cfg.get("narration_split", False))
 
+    def _is_freeform(self) -> bool:
+        """Return whether the agent is configured for freeform (group-chat) mode.
+
+        ``agent.freeform`` が True かを返す. True のとき:
+          - cache が ``sample_games_<N>_freeform/`` 配下を参照する.
+          - scenario 分析プロンプトに「次発話者の選ばれ方」「残り発話回数を踏まえた振る舞い」
+            の観察項目が追加される.
+          - constraints プロンプトに ``[PASS]`` 制御トークンと remain_talk_map 表示が追加される.
+          - ``handle_talk_phase`` / ``handle_whisper_phase`` が ``[PASS]`` を検出して送信を
+            スキップし, 微小ジッタで次のサイクルへ進む.
+
+        サーバが TALK_PHASE_START/END を送る freeform 仕様のときに用いる. 旧来の
+        request/response サーバへ繋ぐときは False のままで OK (フォールバック).
+
+        Returns:
+            bool: True if freeform mode is enabled / freeform 有効なら True
+        """
+        return is_freeform_enabled(self.config.get("agent") or {})
+
+    def _compute_remain_talk_map(self) -> dict[str, int] | None:
+        """Compute today's remaining talk count per agent for freeform mode.
+
+        freeform モード時に「各エージェントが今日あと何回発話できるか」を計算する.
+        - per-day max は ``setting.talk.max_count`` (1日の発話回数上限) を使用.
+            未設定の場合は None を返す (= プロンプトに表示しない).
+        - ``info.talk_history`` のうち本日 (``info.day``) の発話を agent 名で集計し,
+            max - 集計値 で各エージェントの残り回数を求める.
+        - status_map から自エージェント・他エージェントの順序を保ち, 死亡エージェントは
+            含めない (発話できないため自明).
+
+        Returns:
+            dict[str, int] | None: ``{agent_name: remain_count}`` か None.
+        """
+        info = self.info
+        setting = self.setting
+        if info is None or setting is None:
+            return None
+        max_count_obj = getattr(getattr(setting, "talk", None), "max_count", None)
+        max_count = getattr(max_count_obj, "per_agent", None) if max_count_obj is not None else None
+        if not isinstance(max_count, int) or max_count <= 0:
+            return None
+        status_map = info.status_map or {}
+        if not status_map:
+            return None
+        counts: dict[str, int] = dict.fromkeys(status_map, 0)
+        today = info.day
+        for talk in info.talk_history or []:
+            if talk.day != today:
+                continue
+            if talk.agent in counts:
+                counts[talk.agent] += 1
+        return {
+            name: max(0, max_count - counts.get(name, 0))
+            for name, status in status_map.items()
+            if status == Status.ALIVE
+        }
+
     @staticmethod
     def timeout(func: Callable[P, T]) -> Callable[P, T]:
         """Decorator to set action timeout.
@@ -357,14 +415,27 @@ class Agent:
             whisper (Talk): Received whisper / 受信した囁き
         """
 
+    @staticmethod
+    def _is_pass_token(text: str) -> bool:
+        """Return True when the LLM utterance is the ``[PASS]`` control token.
+
+        LLM が freeform モードで「今は自分のターンでない」と判断したときに出す
+        ``[PASS]`` トークンかを判定する. 大文字小文字や前後の空白には寛容にする.
+        """
+        return text.strip().upper() == "[PASS]"
+
     async def handle_talk_phase(self, send: Callable[[str], None]) -> None:
         """Handle talk phase in freeform mode.
 
         グループチャット方式でのトークフェーズ処理.
+        ``agent.freeform`` が True のとき, LLM が ``[PASS]`` を返したら送信せず
+        短い再試行間隔で次サイクルへ進む. 通常の発話間隔にも微小ジッタを加えて
+        全エージェントの同時ウェイクアップを徐々にずらす.
 
         Args:
             send (Callable[[str], None]): Send function / 送信関数
         """
+        freeform = self._is_freeform()
         while self.in_talk_phase:
             if self.info and self.info.remain_count is not None and self.info.remain_count <= 0:
                 break
@@ -372,17 +443,23 @@ class Agent:
             text = self.talk()
             if not self.in_talk_phase:
                 break
+            if freeform and self._is_pass_token(text):
+                self.agent_logger.logger.info(["TALK_PHASE", "pass", text])
+                await asyncio.sleep(random.uniform(2.0, 3.5))  # noqa: S311
+                continue
             send(text)
-            await asyncio.sleep(5)
+            await asyncio.sleep(random.uniform(4.0, 6.0) if freeform else 5)  # noqa: S311
 
     async def handle_whisper_phase(self, send: Callable[[str], None]) -> None:
         """Handle whisper phase in freeform mode.
 
-        グループチャット方式での囁きフェーズ処理.
+        グループチャット方式での囁きフェーズ処理. 挙動は ``handle_talk_phase`` と同じ
+        (freeform=true で ``[PASS]`` 検出 + 微小ジッタ).
 
         Args:
             send (Callable[[str], None]): Send function / 送信関数
         """
+        freeform = self._is_freeform()
         while self.in_whisper_phase:
             if self.info and self.info.remain_count is not None and self.info.remain_count <= 0:
                 break
@@ -390,8 +467,12 @@ class Agent:
             text = self.whisper()
             if not self.in_whisper_phase:
                 break
+            if freeform and self._is_pass_token(text):
+                self.agent_logger.logger.info(["WHISPER_PHASE", "pass", text])
+                await asyncio.sleep(random.uniform(2.0, 3.5))  # noqa: S311
+                continue
             send(text)
-            await asyncio.sleep(5)
+            await asyncio.sleep(random.uniform(4.0, 6.0) if freeform else 5)  # noqa: S311
 
     def _resolve_targets(
         self,
@@ -595,6 +676,8 @@ class Agent:
             "local_profile": local_profile,
             "profile_encoding": profile_encoding,
             "narration_split": self._is_narration_split(),
+            "freeform": self._is_freeform(),
+            "remain_talk_map": self._compute_remain_talk_map() if self._is_freeform() else None,
         }
         env = _get_jinja_env(lang)
         template = env.from_string(prompt)
@@ -817,6 +900,7 @@ class Agent:
         agent_num_int = int(agent_cfg["num"]) if agent_cfg.get("num") is not None else None
         mechanics = derive_mechanics_flags(agent_num_int)
         narration_split = self._is_narration_split()
+        freeform = self._is_freeform()
 
         for model, history, label, meta in targets:
             # 1. SystemMessage (初回 feed のみ). 後続 feed では既に履歴に存在.
@@ -840,6 +924,7 @@ class Agent:
                 "target_role": label,
                 "agent_num": agent_num_int,
                 "mechanics": mechanics,
+                "freeform": freeform,
                 "headings": self.config.get("headings") or {},
             }
             if day is not None:
