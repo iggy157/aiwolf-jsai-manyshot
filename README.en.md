@@ -1,221 +1,172 @@
-# aiwolf-jsai-agent
+# aiwolf-jsai-manyshot
 
 [日本語 README](/README.md)
 
-LLM agent for the AIWolf Competition (Natural Language Division) — JSAI 2026 edition.
+LLM agent for the AIWolf NLP (Natural Language Division) competition — JSAI 2026 edition.
+Specialized fork that primes the LLM with **manyshot scenarios** (real play-log scripts) before each game.
 
-- **multi-turn / single-turn modes** switchable via config
-- **Split LangChain**: use separate models and separate `llm_message_history` for talk-group (talk/whisper) vs action-group (vote/divine/guard/attack) requests
-- **Prompt blocks**: reusable Jinja2 fragments under `prompts/{jp,en}/` composed with `{{ block('...') }}` (switch via config's `lang`), with an optional `markdown` / `xml` heading toggle
-- **Cost tracking**: per-call USD cost written to `log/<game>/cost_summary.{json,md}` in real time
+## Highlights
 
-## Contents
-
-- [Quick start](#quick-start)
-- [Config files](#config-files)
-- [Modes: multi-turn / single-turn](#modes-multi-turn--single-turn)
-- [Split LangChain (talk group vs action group)](#split-langchain-talk-group-vs-action-group)
-- [Prompt blocks](#prompt-blocks)
-- [Cost tracking](#cost-tracking)
-- [scripts/](#scripts)
-- [Development](#development)
+- **Manyshot scenario priming** (`data/sample_games_md/`) — Markdown reference scripts are fed to the LLM as `(HumanMessage, AIMessage summary)` pairs in `llm_message_history`. Pre-warmed cache eliminates INITIALIZE timeouts. -> [doc/scenario_cache.md](doc/scenario_cache.md)
+- **Freeform turn-taking** (`agent.freeform`) — tuned for group-chat servers that send `TALK_PHASE_START/END`. Uses a `[PASS]` control token and a per-agent remain_talk_map for natural turn handoff. -> [doc/freeform.md](doc/freeform.md)
+- **Narration-split mode** (`prompt.narration_split`) — wraps dialogue in `「...」` and lets the LLM write stage directions outside the quotes. Server only sees the dialogue inside the quotes. -> [doc/narration_split.md](doc/narration_split.md)
+- **multi-turn / single-turn modes** — keep the conversation history in LangChain or embed full context per request.
+- **Split LangChain** — separate models / histories for the talk-group (talk/whisper) vs action-group (vote/divine/guard/attack).
+- **Anthropic prompt-cache auto-injection** — get OpenAI-equivalent automatic caching on Claude with one flag (`anthropic.cache: true`). -> [doc/anthropic_cache.md](doc/anthropic_cache.md)
+- **Local profile resolution** (`profile.source: local`) — looks up character names in `data/prompts/profiles.<lang>.yml` and renders the rich profile into identity.
+- **Cost tracking** — per-call USD cost written to `log/<game>/cost_summary.{json,md}` in real time. Distinguishes input / cached_input / output / thinking. -> [doc/cost.md](doc/cost.md)
 
 ## Quick start
 
 Python 3.11+ and [uv](https://docs.astral.sh/uv/) are recommended.
 
 ```bash
-# 1) Clone the repo
-git clone https://github.com/aiwolfdial/aiwolf-nlp-agent-llm.git aiwolf-jsai-agent
-cd aiwolf-jsai-agent
+# 1) Clone
+git clone <repo-url> aiwolf-jsai-manyshot
+cd aiwolf-jsai-manyshot
 
-# 2) Create .env from template (fill in API keys afterwards)
+# 2) Create the .env from the template (edit later)
 cp config/.env.example config/.env
 
-# 3) Copy the 3-file config set (main + multi_turn child + single_turn child)
-#    Swap .en for .jp if you prefer Japanese prompts (the main config's configs: block already points to the .en children)
+# 3) Copy configs from the .example templates
 cp config/config.main.en.yml.example         config/config.main.en.yml
 cp config/config.multi_turn.en.yml.example   config/config.multi_turn.en.yml
 cp config/config.single_turn.en.yml.example  config/config.single_turn.en.yml
 
-# 4) Install dependencies
+# 4) Install
 uv sync
+
+# 5) Pre-warm scenario cache (consumes LLM API)
+#    Cache is written under ./data/scenario_cache/ keyed by scenario.delivery and agent.freeform.
+uv run python scripts/prewarm_scenario.py
 ```
 
-After setting API keys (`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY`, whichever you use) in `config/.env`, run:
+Set the API keys in `config/.env` (`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` as needed):
 
 ```bash
-# Launch agents (defaults to ./config/config.main.jp.yml; the matching child config is auto-merged based on `mode`)
+# Run the agent (defaults to ./config/config.main.jp.yml; loads the matching child config by mode)
 uv run python src/main.py
 
-# Use -c to switch to English prompts
+# Use the English prompts
 uv run python src/main.py -c ./config/config.main.en.yml
 
-# ...or to run multiple configs in parallel
+# Run multiple configs in parallel (mind your rate limits)
 uv run python src/main.py -c './config/*.main.*.yml'
 ```
 
-> Without `uv`: `python -m venv .venv && source .venv/bin/activate && pip install -e .`, then `python src/main.py`.
+## Config layout
 
-## Config files
+Two-tier: **main config + mode-specific child config**.
 
-Configuration is split across three files. The main config references the child configs.
-
-| File | Role |
+| File | Purpose |
 |---|---|
-| `config/config.main.{jp,en}.yml` | Mode (`mode: multi_turn` / `single_turn`), WebSocket, agent, log settings |
-| `config/config.multi_turn.{jp,en}.yml` | LLM settings and prompts for multi-turn mode |
-| `config/config.single_turn.{jp,en}.yml` | LLM settings and prompts for single-turn mode |
+| `config/config.main.{jp,en}.yml` | mode, web_socket, agent, log, profile, headings |
+| `config/config.multi_turn.{jp,en}.yml` | scenario / llm / prompt for multi-turn |
+| `config/config.single_turn.{jp,en}.yml` | scenario / llm / prompt for single-turn |
 
-The main config's `configs:` block maps each mode to a child config path. At load time the matching child config is merged on top of the main config (child wins on key collision). Keeping the `.jp` / `.en` language suffix lets both sets coexist in the same directory.
+Main `configs:` lists child paths; the matching child is merged at load time (child wins on key conflict).
 
-```yaml
-# config.main.en.yml (excerpt)
-mode: multi_turn
-configs:
-  multi_turn: ./config.multi_turn.en.yml
-  single_turn: ./config.single_turn.en.yml
-```
+### Key flags
+
+| Flag | Where | Purpose |
+|---|---|---|
+| `mode` | main | `multi_turn` / `single_turn` |
+| `lang` | main | `jp` / `en` (selects prompts/<lang>/) |
+| `headings.enabled` / `headings.style` | main | prepend headings to blocks (`markdown` / `xml`) |
+| `profile.source` | main | `server` / `local` |
+| `agent.num` | main | 5 / 9 / 13 (village size) |
+| `agent.freeform` | main | enable freeform-server-tuned behavior |
+| `agent.kill_on_timeout` | main | force-stop the action thread on timeout |
+| `scenario.enabled` | mode | load manyshot scripts |
+| `scenario.delivery` | mode | `full` (one-shot) / `by_day` (per-day chunk) |
+| `scenario.ack_mode` | mode | `llm_summary` / `static` |
+| `scenario.use_cache` | mode | use scenario_cache |
+| `scenario.on_cache_miss` | mode | `static` / `live` / `error` |
+| `scenario.prewarm.{talk,action}` | mode | dedicated prewarm model overrides |
+| `llm.type` | mode | `openai` / `google` / `vertexai` / `ollama` / `anthropic` |
+| `llm.separate_langchain` | mode | split LangChain by request kind |
+| `llm.{talk,action}.{type,model,...}` | mode | per-stream model overrides |
+| `anthropic.cache` | mode | enable Claude prompt-cache auto-injection (default true) |
+| `anthropic.cache_ttl` | mode | `5m` / `1h` |
+| `prompt.narration_split` | mode | wrap dialogue in `「」` and allow stage directions outside |
+
+See [doc/config_reference.md](doc/config_reference.md) for full details.
 
 ## Modes: multi-turn / single-turn
 
-| Mode | Behavior | LLM input |
+| Mode | Characteristic | LLM input |
 |---|---|---|
-| **multi-turn** | Conversation history (`llm_message_history`) is kept by LangChain | Full history sent on every request |
-| **single-turn** | No `llm_message_history`; full context is embedded into every prompt | Single `HumanMessage` per call |
+| **multi-turn** | conversation history kept in LangChain | full history per request |
+| **single-turn** | no history; full context embedded each time | a single `HumanMessage` per call |
 
-### Single-turn specifics
-- `initialize` / `daily_initialize` / `daily_finish` are **not sent to the LLM**. Their payloads are snapshotted inside the agent (`day_events`).
-- On talk / whisper / divine / etc., `day_events` and the full `talk_history` / `whisper_history` are rendered directly into the prompt body.
+### single-turn details
+- `initialize` / `daily_initialize` / `daily_finish` are **NOT sent to the LLM**; the agent stores them as snapshots in `day_events`
+- talk / whisper / divine etc. embed `day_events` and the full `talk_history` / `whisper_history` in the prompt body
 
-Switch modes simply by changing the `mode` field in the main config (`config.main.jp.yml` / `config.main.en.yml`).
-
-## Split LangChain (talk group vs action group)
-
-Set `llm.separate_langchain: true` in a child config (`config.multi_turn.{jp,en}.yml` or `config.single_turn.{jp,en}.yml`) to use separate LangChain instances and separate `llm_message_history` per request group.
-
-```yaml
-llm:
-  type: openai               # default provider when separate_langchain=false
-  sleep_time: 3
-  separate_langchain: true
-  talk:
-    type: openai             # used for talk / whisper
-    model: gpt-4o             # ← inline override (overrides openai.model for talk)
-  action:
-    type: openai             # used for vote / divine / guard / attack
-    model: gpt-4o-mini        # ← same provider, different model for action
-```
-
-- **Shared requests** (`initialize` / `daily_initialize` / `daily_finish`) are sent to both models so both histories stay in sync.
-- **Talk-group** requests (`talk` / `whisper`) only update `llm.talk`'s history.
-- **Action-group** requests (`vote` / `divine` / `guard` / `attack`) only update `llm.action`'s history.
-- When `false`, the single `llm.type` model/history is used (legacy behavior).
-
-### Inline setting overrides
-
-`llm.talk` / `llm.action` (and `llm` itself when `separate_langchain=false`) accept the following fields in addition to `type`. Values set here override the matching field from the top-level `<provider>:` section.
-
-| Key | Purpose |
-|---|---|
-| `model` | Model ID to use (e.g. `gpt-4o`, `claude-opus-4-5-20251101`) |
-| `temperature` | Sampling temperature |
-| `pricing_mode` | Switches pricing mode (`standard` / `batch`, etc.) |
-| `base_url` | Custom endpoint URL (used by ollama) |
-
-- Omitted fields fall back to the matching value in `<provider>:`.
-- Omitting `type` falls back to `llm.type` as the default.
-- **`api_key` must not be set here** — it is refused at startup. Use the environment variables in `config/.env` instead.
-- This enables "same provider, different models" (e.g. `talk` = `openai`+`gpt-4o`, `action` = `openai`+`gpt-4o-mini`).
+The scenario_cache mechanism is most useful in multi-turn (the manyshot summary is loaded once and reused). Single-turn pays a per-request prompt size penalty but is simpler and bounds memory growth.
 
 ## Prompt blocks
 
-Five reusable Jinja2 blocks live under `prompts/jp/` and `prompts/en/` respectively. The `lang: jp` / `lang: en` field in the main config selects which directory to load. Reference the blocks from `prompt.<request>` via `{{ block('<name>') }}`.
+Reusable Jinja2 fragments live under `prompts/jp/` and `prompts/en/`. Switch via `lang` in the main config; reference from prompt templates with `{{ block('<name>') }}`.
 
-| Block | Purpose | Key variables |
-|---|---|---|
-| `identity.jinja` | Name / role / profile | `info.agent`, `role.value`, `info.profile` |
-| `history.jinja` | Talk/whisper history loop (switched via `history_source` / `history_start`) | `talk_history`, `whisper_history` |
-| `event.jinja` | Daily-event list (prefers `day_events`, falls back to `info`) | `day_events`, `info` |
-| `instruction.jinja` | Minimal per-request instructions | `request_key` |
-| `constraints.jinja` | Output format + length caps (pulled from server `setting`) | `request_key`, `setting` |
+| Block | Purpose |
+|---|---|
+| `identity.jinja` | name / role / profile |
+| `history.jinja` | utterance-history loop (driven by `history_source` / `history_start`) |
+| `event.jinja` | per-day event listing (`day_events` first, falling back to `info`) |
+| `instruction.jinja` | minimal per-request instruction |
+| `constraints.jinja` | output format + length caps + freeform `[PASS]` instruction |
+| `scenario.jinja` | manyshot script feed body (full delivery) |
+| `scenario_daily.jinja` | manyshot script feed (by_day delivery, per-day) |
+| `scenario_system.jinja` | SystemMessage prepended before the scenario feed |
 
-Usage:
-
-```jinja
-{% set history_source = talk_history %}
-{% set history_start = sent_talk_count %}
-{{ block('history') }}
-{{ block('instruction') }}
-{{ block('constraints') }}
-```
-
-`block('<name>')` renders `prompts/<lang>/<name>.jinja` with the caller's context (same result as a plain `{% include %}`). When the **heading toggle** (see below) is on, it also prepends a heading line.
-
-Both jp and en blocks + configs ship out of the box. To add another language, create `prompts/<lang>/` with the same 5 files and `config/config.<mode>.<lang>.yml.example`, then set `lang: <lang>` in the main config and point its `configs:` block at the `<lang>`-suffixed children.
-
-### Heading toggle (`headings`)
-
-The `headings` section in the main config controls whether each block is prefixed with a heading. This is useful when you want the LLM to see explicit block boundaries.
-
-```yaml
-# config.main.en.yml (excerpt)
-headings:
-  enabled: false     # true to prepend headings
-  style: markdown    # markdown | xml
-```
-
-| style | Output (lang=en) | Output (lang=jp) |
-|---|---|---|
-| `markdown` | `### history` followed by the body | `### 履歴` followed by the body |
-| `xml` | `<history>` … body … `</history>` | `<履歴>` … body … `</履歴>` |
-
-- The heading text defaults to the **block's filename stem** (e.g. `history` for `history.jinja`). Japanese labels are defined in `prompts/jp/_labels.yml`; any unlabeled block falls back to the stem.
-- `prompts/en/` ships no `_labels.yml`, so English headings are always the filename stem.
-- To add a new block `foo.jinja`, simply drop the jinja files in place; optionally add one line (`foo: ○○`) to `prompts/jp/_labels.yml` for a Japanese label. No Python changes needed.
-- With `enabled: false` (the default) blocks are concatenated with no headings, preserving the previous behavior.
-
-## Cost tracking
-
-Each LLM call has its `AIMessage.usage_metadata` extracted and priced against `data/model_cost/*.csv`. Results are appended to `log/<game>/cost_summary.json` with `fcntl` locking in real time, and `cost_summary.md` is rendered on game finish.
-
-### Output layout
-
-Under `log/<YYYYMMDDHHmmssSSS>/` (same naming as `agent_logger`):
-
-```
-log/20260418033529578/
-  kanolab1.log
-  kanolab2.log
-  ...
-  cost_summary.json    # rewritten per LLM call
-  cost_summary.md      # generated at finish
-```
-
-### What is counted
-
-- Tokens are split into **input / cached_input / output / thinking** (OpenAI reasoning, Anthropic extended thinking, Google cached content).
-- Multi-turn cumulative input (full-history `input_tokens`) is fully included.
-- Pricing tables: `data/model_cost/openai.csv`, `anthropic.csv`, `google.csv`.
-- Select `pricing_mode` per provider via `<provider>.pricing_mode` in config (default `standard`; `batch` etc. also supported).
-- `ollama` is free (zero cost). Models missing from the CSV are logged with a warning and flagged `unknown_pricing`.
-
-### Updating the price table
-
-After adding rows to a provider CSV, regenerate the reference table with `uv run python scripts/generate_models_md.py` to refresh `data/models.md`.
+`block('<name>')` renders `prompts/<lang>/<name>.jinja` with the caller's context (equivalent to `{% include %}`). When `headings.enabled: true`, a heading is prepended to the body. Heading text is defined in `prompts/<lang>/_labels.yml`.
 
 ## scripts/
 
-| Script | Purpose |
+| Script | Description |
 |---|---|
-| `scripts/preview_prompt.py` | Read `data/sample_packet.yml` and render all requests for 4 targets (jp × {multi_turn, single_turn} + en × {multi_turn, single_turn}) into `preview.md` |
-| `scripts/generate_models_md.py` | Build `data/models.md` (the human-readable model / pricing reference) from `data/model_cost/*.csv` |
-
-Run:
+| `scripts/prewarm_scenario.py` | Pre-generate the manyshot summary cache (reads `config.scenario.*`) |
+| `scripts/preview_prompt.py` | Read `data/sample_packet.yml` and render every request for jp/en x multi_turn/single_turn into `preview.md` |
+| `scripts/render_scenario_cache.py` | Convert `data/scenario_cache/*.json` to readable Markdown under `data/scenario_cache_readable/` |
+| `scripts/convert_sample_games.py` | Convert raw `data/sample_games/*.log` (CSV) to Markdown under `data/sample_games_md/` |
+| `scripts/migrate_turn_observation.py` | (one-off) inject the "Turn progression and vote declaration" supplement into existing talk-side cache |
 
 ```bash
-uv run python scripts/preview_prompt.py       # regenerate preview.md
-uv run python scripts/generate_models_md.py   # regenerate data/models.md
+uv run python scripts/prewarm_scenario.py                    # prewarm with default config
+uv run python scripts/prewarm_scenario.py --agent-num 9      # prewarm for 9-player (separate dir)
+uv run python scripts/prewarm_scenario.py --force            # force-regenerate ignoring existing cache
+uv run python scripts/preview_prompt.py                      # regenerate preview.md
+uv run python scripts/render_scenario_cache.py               # regenerate readable .md
+```
+
+## Directory layout
+
+```
+aiwolf-jsai-manyshot/
+├── config/                            # configs (.example shipped)
+├── data/
+│   ├── model_cost/                    # per-provider price CSVs
+│   ├── prompts/profiles.{jp,en}.yml   # local profile dictionary
+│   ├── sample_games/sample_games_<N>/ # original CSV logs
+│   ├── sample_games_md/sample_games_<N>/  # MD-converted (manyshot source)
+│   ├── scenario_cache/                # prewarm cache (4 dirs: 5p/5p_freeform/9p/9p_freeform)
+│   ├── scenario_cache_readable/       # readable MD versions of the above
+│   └── sample_packet.yml              # preview sample
+├── doc/                               # per-feature deep-dive docs
+├── prompts/
+│   ├── jp/  (8 blocks + _labels.yml)
+│   └── en/  (8 blocks + _labels.yml)
+├── scripts/                           # utilities
+├── src/
+│   ├── agent/                         # Agent implementation (incl. role-specific)
+│   ├── utils/                         # helpers (jinja_env / scenario_cache /
+│   │                                  #   anthropic_cache / cost_utils, ...)
+│   ├── main.py                        # entry point
+│   └── starter.py                     # game-session loop
+├── preview.md                         # (generated) prompt preview
+├── pyproject.toml
+└── README.md
 ```
 
 ## Development
@@ -224,34 +175,11 @@ uv run python scripts/generate_models_md.py   # regenerate data/models.md
 uv run ruff check .     # lint
 uv run ruff format .    # format
 uv run pyright          # type check (strict)
-```
-
-### Directory layout
-
-```
-aiwolf-jsai-agent/
-├── config/                       # Config examples
-├── data/
-│   ├── model_cost/               # Per-provider pricing CSVs
-│   ├── models.md                 # Generated model reference
-│   └── sample_packet.yml         # Sample for preview
-├── prompts/
-│   ├── jp/                       # Japanese Jinja2 blocks (5 files + _labels.yml)
-│   └── en/                       # English Jinja2 blocks (5 files)
-├── scripts/                      # Utility scripts
-├── src/
-│   ├── agent/                    # Agent base + role subclasses
-│   ├── utils/
-│   │   ├── agent_logger.py       # Per-game log output
-│   │   ├── cost_utils.py         # Pricing table + cost math
-│   │   ├── cost_logger.py        # cost_summary.{json,md} writer
-│   │   └── ...
-│   ├── main.py
-│   └── starter.py
-└── preview.md                    # (generated)
+uv run python scripts/preview_prompt.py   # sanity-check after prompt edits
 ```
 
 ## References
 
-- [aiwolf-nlp-agent](https://github.com/aiwolfdial/aiwolf-nlp-agent) — reference implementation (protocol details, etc.)
+- [aiwolf-nlp-agent](https://github.com/aiwolfdial/aiwolf-nlp-agent) — reference implementation
 - [aiwolf-nlp-server](https://github.com/aiwolfdial/aiwolf-nlp-server) — game server
+- [aiwolf-nlp-common](https://github.com/aiwolfdial/aiwolf-nlp-common) — shared library

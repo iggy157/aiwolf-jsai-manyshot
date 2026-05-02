@@ -1,0 +1,11 @@
+# English heading labels.
+# Defines the heading text that corresponds to each ``prompts/en/<name>.jinja`` block.
+# Blocks without an entry fall back to using the filename stem as the heading.
+# Add a new line whenever a new block is introduced if a custom heading is desired.
+
+history: History
+instruction: Instruction
+identity: Identity
+event: Event
+constraints: Output constraints
+scenario: Reference scripts

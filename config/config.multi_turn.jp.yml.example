@@ -104,6 +104,13 @@ ollama:
 anthropic:
   model: claude-opus-4-5-20251101
   temperature: 1.0
+  # Anthropic prompt cache の自動注入. true (default) のとき, 毎コール直前に末尾 HumanMessage
+  # 直前の最後の AIMessage に cache_control を自動付与し, scenario + 過去ターンを Anthropic の
+  # prompt cache に乗せる. OpenAI の自動キャッシュと同等の効果. false にすると素の挙動 (全額課金).
+  cache: true
+  # cache TTL: "5m" (default, 1.25× write cost) または "1h" (2× write cost).
+  # 1局が 5 分以内に終わるなら 5m で十分. 長引くゲームは 1h を検討.
+  cache_ttl: "5m"
 
 # multi-turn モードでは LLM の会話履歴 (llm_message_history) が LangChain 側で保持されるため,
 # 各リクエストのプロンプトは最低限のワンラインで足りる.
@@ -111,19 +118,39 @@ anthropic:
 # 共通リクエスト (initialize / daily_initialize / daily_finish) のプロンプトで identity / event ブロックを
 # include し, 両系統に最低限の情報共有を行う.
 prompt:
+  # narration_split:
+  #   false (default) → 旧来動作. 発話本文だけを LLM に出力させ, ト書き・地の文は禁止.
+  #   true → LLM に発話を ``「...」`` で囲ませ, ``「」`` の外側にト書き・地の文を許可する.
+  #          サーバには ``「」`` 内側だけが連結されて送信される (extract_dialogue_quotes).
+  #          文字数制限は ``「」`` 内側の合計のみに適用される.
+  #   注意: true にすると scenario_system / constraints のプロンプト本文が変わるため,
+  #         scenario_cache のキーが別キーになる (= 既存キャッシュは使えないので
+  #         prewarm を再実行する必要あり, または on_cache_miss=static で fallback 動作).
+  narration_split: false
+
+  # 共通リクエスト (initialize / daily_initialize / daily_finish) はゲーム状態のコンテキストを
+  # LLM に積むためのもので, 役のセリフを生成させてはいけない. in-character の発話を生成すると
+  # llm_message_history に AIMessage として残り, 後続の talk_phase で LLM が「自分が前のターンで
+  # 言ったこと」として参照してしまう.
   initialize: |-
     {{ block('identity') }}
     {{ block('instruction') }}
     以降のリクエストには日本語で応答してください。レスポンスはそのままゲームに送信されるため, 不要な情報を含めないでください。
+
+    これはセットアップメッセージです。**役のセリフを生成せず**, 「了解しました」とだけ返してください。実際の発話は後続の talk / whisper リクエストで行います。
   daily_initialize: |-
     {{ block('instruction') }}
     {{ block('event') }}
+
+    これは日付開始の通知です。**役のセリフを生成せず**, 「了解しました」とだけ返してください。実際の発話は後続の talk / whisper リクエストで行います。
   daily_finish: |-
     {{ block('instruction') }}
     {{ block('event') }}
     {% set history_source = talk_history -%}
     {% set history_start = sent_talk_count -%}
     {{ block('history') }}
+
+    これは日付終了の通知です。**役のセリフ・感想・反省を生成せず**, 「了解しました」とだけ返してください。実際の発話は次の日の talk / whisper リクエストで行います。
   talk: |-
     {% set history_source = talk_history -%}
     {% set history_start = sent_talk_count -%}

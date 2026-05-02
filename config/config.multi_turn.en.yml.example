@@ -103,21 +103,49 @@ ollama:
 anthropic:
   model: claude-opus-4-5-20251101
   temperature: 1.0
+  # Anthropic prompt-cache auto-injection. When true (default), the wrapper inserts a
+  # cache_control marker on the last AIMessage before the trailing HumanMessage so the
+  # scenario + prior turns ride on Anthropic's prompt cache. Equivalent to OpenAI's
+  # automatic caching. Set to false to disable (full base price).
+  cache: true
+  # cache TTL: "5m" (default, 1.25x write cost) or "1h" (2x write cost).
+  # 5m is enough if a game finishes in under 5 minutes; consider 1h for longer games.
+  cache_ttl: "5m"
 
 prompt:
+  # narration_split:
+  #   false (default) -> legacy behavior. The LLM emits dialogue body only; stage directions and
+  #     narrative prose are forbidden.
+  #   true -> the LLM wraps dialogue with ``「...」`` and may write stage directions outside the
+  #     quotes. Only the contents of ``「」`` are extracted and sent to the server. The character
+  #     limit applies only to the combined ``「」`` contents.
+  #   Note: enabling this changes scenario_system / constraints prompt text, so the scenario_cache
+  #     key changes. Re-run prewarm or rely on on_cache_miss=static fallback.
+  narration_split: false
+
+  # The shared requests (initialize / daily_initialize / daily_finish) are only meant to feed
+  # game-state context to the LLM. They must not produce in-character dialogue, otherwise the
+  # generated AIMessage stays in llm_message_history and the LLM treats it as something it just
+  # said when the next talk_phase begins.
   initialize: |-
     {{ block('identity') }}
     {{ block('instruction') }}
     Respond in English to subsequent requests. Your response is sent directly to the game; do not include unnecessary content.
+
+    This is a setup message. **Do not generate in-character dialogue.** Reply only with "Acknowledged.". The actual utterances will come in subsequent talk / whisper requests.
   daily_initialize: |-
     {{ block('instruction') }}
     {{ block('event') }}
+
+    This is a day-start notice. **Do not generate in-character dialogue.** Reply only with "Acknowledged.". The actual utterances will come in subsequent talk / whisper requests.
   daily_finish: |-
     {{ block('instruction') }}
     {{ block('event') }}
     {% set history_source = talk_history -%}
     {% set history_start = sent_talk_count -%}
     {{ block('history') }}
+
+    This is a day-end notice. **Do not generate in-character dialogue, reflections, or commentary.** Reply only with "Acknowledged.". The actual utterances will come in the next day's talk / whisper requests.
   talk: |-
     {% set history_source = talk_history -%}
     {% set history_start = sent_talk_count -%}

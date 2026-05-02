@@ -1,0 +1,75 @@
+{#-
+  scenario_daily.jinja (English)
+  HumanMessage body used by the by_day delivery mode of scenario.delivery.
+  Uses the same template for Day 0 (INITIALIZE) and Day N>=1 (DAILY_INITIALIZE),
+  branching on the ``day`` value for the lead-in and summary points.
+
+  - Day 0: each manyshot's preamble (## role assignments) + Day 0 chapter is shown,
+    along with the system-wide introduction. Day 1+ chapters are added later via
+    daily_initialize.
+  - Day N (N>=1): only the manyshot's Day N chapter is shown, treated as supplementary
+    material that follows what was given on Day 0.
+
+  Expects:
+    scenario_bodies (list[str])  # chapters for the relevant day (Day 0 includes preamble)
+    scenario_count (int)
+    day (int)
+    ack_mode ('llm_summary' | 'static')
+    target_role ('talk' | 'action' | 'default')
+    mechanics (dict[str, bool], optional)
+    agent_num (int, optional)
+    freeform (bool, optional, default False)
+-#}
+{%- set _has_whisper = mechanics.has_whisper if mechanics is defined else True -%}
+{%- set _has_bodyguard = mechanics.has_bodyguard if mechanics is defined else True -%}
+{%- set _freeform = freeform if freeform is defined else False -%}
+{%- set _talk_role = 'talk' + (' / whisper' if _has_whisper else '') -%}
+{%- set _action_list = 'vote / divine' + (' / guard' if _has_bodyguard else '') + ' / attack' -%}
+{% if day == 0 -%}
+The following is the **Day 0 portion** of {{ scenario_count }} reference scripts (role assignments + Day 0 progression). Use it as background study material.
+
+In this system, multiple performer agents each play one character; together they write the next moves (utterance or decision) and the game itself becomes a fresh script. You are one of those performers. The current feed is limited to the Day 0 portion; subsequent days are appended at the start of each daily_initialize.
+
+You only write the next move belonging to your assigned character (utterance body, or one target agent name). Do not voice other characters, narration, or stage directions; do not use script-style markup with character names or labels (the server handles formatting).
+{% else -%}
+The following is the **Day {{ day }} portion** of {{ scenario_count }} reference scripts. It is supplementary material that follows the Day 0 portion received during INITIALIZE. The actual game is now on Day {{ day }}, so use it to internalize the typical pacing for this point in the game.
+{% endif -%}
+
+--- Scripts begin ---
+
+{% for body in scenario_bodies %}
+{{ body }}
+
+---
+
+{% endfor -%}
+--- Scripts end ---
+
+{% if ack_mode == 'llm_summary' -%}
+{% if target_role == 'action' -%}
+Having read the above, summarize observations relevant to **your assigned character's target choices ({{ _action_list }})** for Day {{ day }} (target ~300–500 chars / ~100–170 words, bullet points OK).
+Extract 3–5 main "given this Day {{ day }} situation, this target is chosen" pairs. The more specific the situation side is, the more useful in actual play.
+Example: "If the Day {{ day }} board has 2 seer COs, the vote tends to go to whichever has the weaker rationale."
+
+These are observed examples; if the situation differs, different decisions also occur.
+{% elif target_role == 'talk' -%}
+Having read the above, summarize observations relevant to **your assigned character's utterance flow ({{ _talk_role }})** for Day {{ day }} (target ~350–550 chars / ~120–180 words, bullet points OK).
+
+- Natural pivots within Day {{ day }} and what board states drive which topics / tones. Frame each in terms of "why is this utterance produced", not pattern memorization.
+- Distribution of responses to the same topic: replies in the scripts split into "brief agreement / agreement + caveat / different angle / neutral observation / skip" rather than uniform agreement.
+- Off-mainstream positions (when someone is being pressed): under what conditions do **acknowledging fault / neutral observation / mediator / withholding** appear? The scripts avoid the binary attacker-vs-target dynamic.
+{%- if _freeform %}
+- **Day {{ day }} turn progression and vote declaration**: talk consists of Turns 0–3. The final Turn typically closes with a clear ``@-mention`` vote declaration (script observation). Reserving the last utterance for the vote declaration is the natural budget allocation.
+{%- endif %}
+
+These are observed examples; if the situation differs, different flows or role assignments also occur.
+{% else -%}
+Having read the above, summarize observations relevant to **your assigned character's utterance and judgment** for Day {{ day }} (target ~350–550 chars / ~120–180 words, bullet points OK). Frame discussion flow / tone / decision linkage in Day {{ day }} as situation -> discussion/judgment pairs. Including how responses disperse in role and how off-mainstream positions (acknowledging fault / neutral / mediator) are triggered keeps the analysis from collapsing into monoculture.
+
+These are observed examples.
+{% endif -%}
+
+This summary is for your own notes; you do not need to quote script lines verbatim.
+{% else -%}
+Once you have finished reading, reply briefly with "Acknowledged."
+{% endif -%}

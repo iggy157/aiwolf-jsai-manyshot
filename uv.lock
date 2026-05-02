@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
-name = "aiwolf-nlp-agent-llm"
-version = "0.3.6"
+name = "aiwolf-jsai-manyshot"
+version = "0.4.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiwolf-nlp-common" },

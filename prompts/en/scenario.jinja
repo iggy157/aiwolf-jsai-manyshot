@@ -1,25 +1,34 @@
 {#-
   scenario.jinja (English)
   HumanMessage body that feeds sample-game scripts to the LLM at initialization.
-  Output-time rules (format prohibitions, etc.) are provided as a SystemMessage
-  via scenario_system.jinja; this template focuses on script presentation and
-  summary instructions only.
+  Output-time rules (format prohibitions, etc.) are provided as a SystemMessage via
+  scenario_system.jinja; this template focuses on script presentation and summary
+  instructions.
+
+  Analysis policy (revised 2026-05): emphasize "situation -> discussion/decision" causal
+  pairs over linear pattern memorization. Extract multiple observed flow patterns paired
+  with their triggering conditions, frame everything as observed examples (not as
+  prescriptive rules), and surface response-dispersion / off-mainstream positioning to
+  prevent monoculture in actual play.
+
   Expects:
     scenario_bodies (list[str])
     scenario_count (int)
     ack_mode ('llm_summary' | 'static')
     target_role ('talk' | 'action' | 'default')
-      When separate_langchain=true, talk and action histories each ask for
-      different observation points. When separate_langchain=false, 'default'
-      is passed and a combined summary is requested.
+    mechanics (dict[str, bool], optional): has_whisper / has_bodyguard / has_medium.
     agent_num (int, optional)
-      Village size. Used to switch the action-axis between 5-player
-      (wolf/possessed/seer/villager only) and 9-player+ (with medium/bodyguard).
-      Defaults to the 9-player axis when not specified or != 5.
+    freeform (bool, optional, default False)
 -#}
-The following are "reference scripts" for this Werewolf game. You will read {{ scenario_count }} real play-log(s) as prior study.
+{%- set _has_whisper = mechanics.has_whisper if mechanics is defined else True -%}
+{%- set _has_bodyguard = mechanics.has_bodyguard if mechanics is defined else True -%}
+{%- set _has_medium = mechanics.has_medium if mechanics is defined else True -%}
+{%- set _freeform = freeform if freeform is defined else False -%}
+{%- set _talk_role = 'talk' + (' / whisper' if _has_whisper else '') -%}
+{%- set _action_list = 'vote / divine' + (' / guard' if _has_bodyguard else '') + ' / attack' -%}
+The following are reference scripts for this Werewolf game. {{ scenario_count }} real play-log(s) for prior study.
 
-In this system, you play one of several performers who "act out" a Werewolf game. These scripts exist so you can internalize the flow of discussion, the pacing of utterances, the rhythm of topic transitions, and the consistency of each character's tone.
+In this system, multiple performer agents each play one character; together they write the next moves (utterance or decision) and the game itself becomes a fresh script. You are one of those performers. The scripts exist so you can internalize the flow of discussion, the rhythm of utterances, the timing of topic transitions, and the consistency of each character's tone. You only write the next move belonging to your assigned character (utterance body, or one target agent name); do not voice other characters, narration, or stage directions; do not use script-style markup with character names or labels (the server handles formatting).
 
 --- Scripts begin ---
 
@@ -33,40 +42,64 @@ In this system, you play one of several performers who "act out" a Werewolf game
 
 {% if ack_mode == 'llm_summary' -%}
 {% if target_role == 'action' -%}
-{% if agent_num == 5 -%}
-Having read the above, give a **concise** reply (roughly 500–800 characters / ~150–250 words) summarizing your observations. Bullet points are fine.
-You will be responsible only for **action decisions** (vote, divine, attack). The 5-player setup is "Werewolf×1, Possessed×1, Seer×1, Villager×2" — there is no medium or bodyguard. Extract "given such-and-such history, do this" patterns from the scripts along these axes:
-- **Choosing a divine target** (Seer): typical day-1 priorities, selection based on utterance volume or suspicious behavior, targets needed to disambiguate counter-COs, consistency between Day 0 statements and the divination rationale
-- **Choosing a vote target**: how to align with a seer's black judgment, how counter-CO structure (true vs. fake) shapes the lynch target, comparing the persuasiveness of divination rationales, how to behave when you're the one under suspicion
-- **Choosing an attack target** (Werewolf): whether to bite the seer who CO'd, whether to cut down a vocal villager, coordination with the possessed (your fake-seer ally), the 5-player constraint that a single attack can collapse the whole board
-- **5-player-specific points**: how thin the move count is (one mistake is fatal), the day-1 1-vs-1 setup formed by two seer COs (black-judged target vs. counter-seer), the limited slack the village side has with only 2 villagers + 1 seer
-- **Role-specific motivations**: what each of werewolf, possessed, seer, villager prioritizes when picking a target
-- Throughout, anchor each pattern to a specific **history → decision** link, not generic advice.
+{% if not _has_bodyguard and not _has_medium -%}
+Having read the above, summarize observations (~600-900 chars / ~200-300 words, bullet points OK).
+You are responsible only for **action decisions ({{ _action_list }})** (5-player setup: Werewolf x1, Possessed x1, Seer x1, Villager x2; medium and bodyguard do not appear). Frame the analysis as **situation -> decision** rather than fixed rules.
+
+- **Divine** (Seer): from what board info is the target chosen? E.g. "an unread who steered Day 0 progression -> divine to drive next day's questioning"; "the most suspicious grey is narrowed to one -> re-divine to confirm".
+- **Vote**: how votes converge by situation. "Black judgment + no counter -> lynch the black"; "2-CO + thin rationale on one side -> votes shift to the weak side"; "all whites -> votes converge on the most suspicious grey by behavior". Include the meaning shift between 1-CO (trust the result, advance) and 2-CO (rationale comparison / Day-0 alignment).
+- **Attack** (Werewolf): bite the publicly trusted seer, cut down a vocal villager, or preserve the possessed's fake-seer angle - depending on remaining count and divination structure.
+- **5-player specifics**: how thin the move count is (one mistake fatal), the day-1 1-vs-1 setup formed by two seer COs, the limited slack of 2 villagers + 1 seer, etc.
+
+Each item should be **conditional** ("given this situation, do this"). These are observed examples; if the situation differs, different decisions also occur.
 {% else -%}
-Having read the above, give a **concise** reply (roughly 500–800 characters / ~150–250 words) summarizing your observations. Bullet points are fine.
-You will be responsible only for **action decisions** (vote, divine, guard, attack). Extract "given such-and-such history, do this" patterns from the scripts along these axes:
-- **Choosing a divine target**: typical day-1 priorities, selection based on utterance volume or suspicious behavior, targets needed to disambiguate counter-COs, alignment with the medium's results
-- **Choosing a vote target**: how to align with a seer's black judgment, how counter-CO structure (true vs. fake) shapes the lynch target, grey-lynch reasoning in 9-player games, how to behave when you're the one under suspicion
-- **Choosing a guard target**: when to protect a true seer/medium, exceptional cases for guarding a grey (key reasoning roles), reading the prior night's attack and vote patterns to back-infer the wolves' moves
-- **Choosing an attack target**: whether to bite a CO'd role (seer/medium), whether to cut down a vocal villager / key reasoner, bodyguard-prediction logic (assume true seer is guarded), whether to keep or eliminate a possessed
-- **9-player-specific points**: handling counter-CO (e.g. dual SEER claims), reconciling medium and seer results, choosing the bodyguard's protection target, board state with extra roles
-- **Role-specific motivations**: what each of werewolf, possessed, seer, bodyguard, medium prioritizes when picking a target
-- Throughout, anchor each pattern to a specific **history → decision** link, not generic advice.
+Having read the above, summarize observations (~600-900 chars / ~200-300 words, bullet points OK).
+You are responsible only for **action decisions ({{ _action_list }})**. Frame the analysis as **situation -> decision** rather than fixed rules.
+
+- **Divine**: from what board info is the target chosen? Utterance volume, suspicious phrasing, targets needed to disambiguate counter-COs{% if _has_medium %}, alignment with the medium's results{% endif %}.
+- **Vote**: how to align with a black judgment, how counter-CO structure shapes the lynch, grey-lynch reasoning, and how to behave when you are under suspicion. Note the meaning shift between 1-CO and 2-CO situations.
+{% if _has_bodyguard -%}
+- **Guard**: when to protect a true seer/medium, exceptions where guarding a grey makes sense, reading prior attacks/votes to back-infer the wolves' moves.
+{% endif -%}
+- **Attack**: whether to bite a publicly CO'd role ({{ 'seer / medium' if _has_medium else 'seer' }}), whether to cut down a vocal villager{% if _has_bodyguard %}, bodyguard-prediction logic (assume the true seer is guarded){% endif %}, whether to keep or eliminate the possessed.
+- **9-player+ specifics**: handling counter-CO (e.g. dual SEER claims){% if _has_medium %}, reconciling medium and seer results{% endif %}{% if _has_bodyguard %}, choosing the bodyguard's protection target{% endif %}, board state with extra roles.
+
+Each item should be **conditional** ("given this situation, do this"). These are observed examples; if the situation differs, different decisions also occur.
 {% endif -%}
 {% elif target_role == 'talk' -%}
-Having read the above, give a **concise** reply (roughly 750–1000 characters / ~250–350 words) summarizing your observations. Bullet points are fine.
-You will be responsible only for **utterances (talk) and whispers**. Summarize along these axes:
-- Common discussion-flow patterns (e.g. CO → questions → narrowing → vote)
-- Day-by-day characteristics (Day 0 introductions, Day 1 CO clashes, mid/late narrowing, etc.)
-- Natural turn-taking rhythms (how a prompt is typically answered)
-- Timing of topic shifts, uses of silence or brief back-channels
-- How each character keeps their tone, first-person pronoun, and speech quirks consistent
+Having read the above, summarize observations (~800-1100 chars / ~280-380 words, bullet points OK).
+You are responsible only for **{{ _talk_role }}**. Frame the analysis as **situation -> discussion** causal pairs rather than linear pattern memorization.
+
+- **Board state to topic mapping** (3-5 main pairs): how seer-CO count (1-CO / 2-CO+), black judgments, attack results, remaining count, etc. shape the topic, tone, and pacing of the moment. Example: "with 2-CO, divination rationale and Day-0 alignment become the main subject"; "with 1-CO the result is taken at face value and the day moves on, deep rationale-grilling rarely happens".
+- **Observed discussion-flow patterns** (2-3 main ones): the scripts contain different flows under different situations. Pair each with the situation that triggers it. Example:
+    - 2-CO + black judgment -> result-share -> the black-judged target's defense -> vote declaration
+    - 2-CO -> morning CO -> rationale comparison -> Q&A -> truth assessment -> vote
+    - No divination result, only greys -> behaviour-based mutual suspicion -> grey narrowing
+  These are observed examples; the actual flow can vary.
+- **Day-by-day phase feel**: natural transition points within each day (Day 0 = self-intros + procedure agreement + light impressions; Day 1 = morning CO + result share + verification + vote; Day 2+ = attack-result reading + consistency check with prior days).
+- **Distribution of responses to the same topic**: replies in the scripts split across "concise agreement / agreement + caveat / different angle / neutral observation / skip", rather than uniform agreement. Notice which character takes which role in which situation.
+- **Off-mainstream positioning** (when someone is being pressed): besides the attackers, **acknowledging fault / neutral observation / mediator / withholding** are also observed. Read the conditions that trigger them. Avoiding the binary attacker-vs-target dynamic is what keeps the scripts natural.
+- **Utterance construction**: feel for utterance length, "pick up one thing the other said + add your own basis + short conclusion" rhythm, immediate replies to questions plus an additional point.
+- **Silence / brevity / pivots / tonal consistency**: how the scripts steer back to the main topic when discussion drifts, how short lines convey conviction or exasperation in the late game, how each character holds their first-person pronoun / sentence endings / register, and how tonal collapses under pressure are themselves read as signal.
+{% if _freeform -%}
+- **Next-speaker selection** (3-5 observations): the natural baton-pass in the scripts. Examples: "@-mention or naming -> the named character replies"; "direct question -> the questioned answers"; "topic drifts / emotional tone -> a mediator restores the main thread"; "right after a CO -> the CO's elaboration or a counter-CO emerges"; "intro phase -> turn-by-turn round with rare interruptions". Useful for judging "is it natural for me to speak next?"
+- **Talk-budget-aware behaviour** (2-4 observations): with a daily utterance cap (typically 4) and Over status terminating participation. Observed in the scripts: "do not press core questions on someone with few utterances left, redirect or proceed yourself"; "do not address someone who has Over'd"; "save the core declaration when your own count is low rather than spending on filler". Avoid fruitless round-trips with someone who cannot reply.
+{% endif -%}
+- **Day turn progression and vote declaration**: each day's talk consists of Turns 0-3. Roles per Turn: Turns 0-1 = CO + procedure agreement + initial impressions; Turn 2 = Q&A + verification (the discussion proper); **Turn 3 (final): every speaker closes with a clear ``@-mention`` vote declaration** (e.g. "I vote for @<name>"). Closing the final Turn with rationale-grilling or hesitation is virtually absent in the scripts; the day's resolution lands on the final Turn. Reserving the last utterance for the vote declaration is the natural budget allocation; spending it all on the discussion leaves no room to express a vote and breaks consistency between utterance and vote outcome.
+
+These are observed examples; if the situation differs, different flows or role assignments also occur.
 {% else -%}
-Having read the above, give a **concise** reply (roughly 750–1000 characters / ~250–350 words) summarizing your observations. Bullet points are fine.
-You will be responsible for talk, whisper, AND action decisions (vote/divine/guard/attack). Summarize along these axes:
-- Discussion flow patterns (CO → questions → narrowing → vote)
-- Natural utterance rhythms, topic transitions, character-voice consistency
-- History → action links ("given this flow, here is how to vote/divine/guard/attack")
+Having read the above, summarize observations (~800-1100 chars / ~280-380 words, bullet points OK).
+You are responsible for **{{ _talk_role }} AND action decisions ({{ _action_list }})**. Frame the analysis as situation -> discussion/decision causal pairs.
+
+- **Board state to topic/decision mapping** (3-5 main pairs).
+- **Observed flow patterns** (2-3 main ones), each paired with the triggering situation.
+- **Day-by-day phase feel**.
+- **Response dispersion**: scripts split across "agreement / caveat / different angle / neutral / skip" rather than uniform.
+- **Off-mainstream positioning**: acknowledging fault / mediator / withholding under specific conditions.
+- **Decision linkage**: "given this flow, here is how to {{ _action_list }}".
+
+These are observed examples; if the situation differs, different flows also occur.
 {% endif -%}
 
 This summary is for your own notes; you do not need to quote script lines verbatim.

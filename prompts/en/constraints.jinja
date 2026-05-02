@@ -1,18 +1,28 @@
 {#-
   constraints.jinja (English)
   Output format (per request_key) + dynamic length caps from server setting / info.
-  Expects: request_key, setting?, info?
+  Expects: request_key, setting?, info?, narration_split?, freeform?, remain_talk_map?, talk_state?
 
   Server length-cap model (aiwolf-nlp-server):
-    - per_talk:       Absolute cap per utterance (omitted from the packet when set to -1 → None)
+    - per_talk:       Absolute cap per utterance (omitted from the packet when set to -1 -> None)
     - base_length:    Base allowance per utterance (does not consume the per_agent budget)
     - mention_length: Extra characters allowed *only* when the utterance @-mentions another agent
     - per_agent:      Per-agent daily cap (remaining shown via info.remain_length)
   Falls back to base_length + mention_length when per_talk is absent.
   The mention example is picked from info.status_map (first name that is not self)
-  so it matches what the server actually accepts (`@<GameName>`): the character
-  name when custom_profile is enabled, or "Agent[01]" otherwise.
+  so it matches what the server actually accepts (``@<GameName>``).
+
+  When narration_split=True the LLM wraps dialogue with ``「...」`` and may add stage directions
+  outside; the character cap applies only to the contents inside ``「」``.
+  When freeform=True the agent operates under group-chat protocol; ``[PASS]`` and the per-agent
+  remain_talk_map are surfaced so the LLM can decide whether it is its natural turn.
+  talk_state (per-self count snapshot) is shown for talk/whisper regardless of freeform, so the
+  LLM can shift toward vote-declaration when its remaining count gets low.
 -#}
+{%- set _narration_split = narration_split if narration_split is defined else False -%}
+{%- set _freeform = freeform if freeform is defined else False -%}
+{%- set _remain_map = remain_talk_map if remain_talk_map is defined else none -%}
+{%- set _talk_state = talk_state if talk_state is defined else none -%}
 {%- set mention_ns = namespace(example=none) -%}
 {%- if info is not none and info.status_map is not none -%}
 {%- for name in info.status_map -%}
@@ -24,13 +34,14 @@
 {%- set mention_hint = ('`@' ~ mention_ns.example ~ '`') if mention_ns.example is not none else 'the agent name prefixed with `@`' -%}
 {% if request_key == 'talk' -%}
 {%- set ml = (setting.talk.max_length if setting is not none and setting.talk is not none and setting.talk.max_length is not none else none) -%}
+{%- set _length_unit = 'the dialogue inside ``「」``' if _narration_split else 'each utterance' -%}
 {% if ml is not none and ml.per_talk is not none -%}
-Keep each utterance within {{ ml.per_talk }} characters.
+Keep {{ _length_unit }} within {{ ml.per_talk }} characters.
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
-If you @-mention another agent (e.g. {{ mention_hint }}), you may extend your utterance by up to {{ ml.mention_length }} additional characters.
+If you @-mention another agent (e.g. {{ mention_hint }}), you may extend by up to {{ ml.mention_length }} additional characters.
 {% endif -%}
 {% elif ml is not none and ml.base_length is not none -%}
-Keep each utterance within {{ ml.base_length }} characters.
+Keep {{ _length_unit }} within {{ ml.base_length }} characters.
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
 If you @-mention another agent (e.g. {{ mention_hint }}), you may use up to {{ ml.mention_length }} additional characters (max {{ ml.base_length + ml.mention_length }} total).
 {% endif -%}
@@ -38,18 +49,52 @@ If you @-mention another agent (e.g. {{ mention_hint }}), you may use up to {{ m
 {% if info is not none and info.remain_length is not none -%}
 Remaining utterance budget for today: {{ info.remain_length }} characters.
 {% endif -%}
+{%- if _talk_state is not none %}
+Your talk activity today: {{ _talk_state.own_count }} utterance(s) used (cap {{ _talk_state.max_count }}), {{ _talk_state.own_remain }} remaining. Total utterances today: {{ _talk_state.total_today }}.
+{% if _talk_state.own_remain <= 1 -%}
+[1 utterance or fewer remaining] Stop pushing the discussion and **declare your vote target with ``@-mention``** (e.g. ``I vote for @<name>``). The scripts consistently close with vote declarations on the final Turn.
+{%- elif _talk_state.own_remain <= 2 -%}
+[2 utterances remaining] You are approaching the close. Start being explicit about who you intend to vote for.
+{%- endif %}
+{% endif -%}
+{%- if _narration_split %}
+The dialogue body MUST be wrapped in ``「...」``. Stage directions (e.g. ``(taking a slow breath)``) may go outside the quotes; only the contents inside ``「」`` are concatenated and sent to the server. The character cap above applies only to the combined contents inside the quotes; stage directions do not count. Do NOT emit Markdown headings/tables (``### Turn 0``), meta labels ("Day N"), ``Name: utterance`` structure, voiced other characters, or third-party narration in either inside or outside the quotes.
+Only when you truly have nothing more to say for the rest of today, output the literal control token ``「Over」`` by itself.
+{%- else %}
 Output only the utterance. Do not include explanations, meta commentary, or preambles.
-Do NOT imitate the script's format: headings (e.g. `### Turn 0`), tables (e.g. `| ID | Name |`), meta labels ("Day N", "Night actions"), and the `Name: utterance` script structure are meta elements handled by the server. Learn from the scripts' *content*: discussion flow, utterance tempo, and character voice — not their markup.
+Do NOT imitate the script's format: headings (``### Turn 0``), tables (``| ID | Name |``), meta labels ("Day N", "Night actions"), and ``Name: utterance`` script structure are meta elements handled by the server.
 Only when you truly have nothing more to say for the rest of today, output the literal control token "Over" by itself.
+{%- endif %}
+{%- if _freeform %}
+
+[freeform mode: next-speaker decision]
+{% if _remain_map -%}
+Per-agent remaining utterance counts for today:
+{% for name, remain in _remain_map.items() -%}
+{% if remain <= 0 %}- {{ name }}: Over (used up, cannot reply)
+{% else %}- {{ name }}: {{ remain }} remaining
+{% endif -%}
+{%- endfor %}
+{% endif -%}
+Considering the recent flow and the per-agent counts, decide whether speaking now is natural for you. If any of the following holds, output exactly ``[PASS]`` (treated as an empty utterance and not sent):
+- Another character was just @-mentioned or directly questioned -> the addressee (not you) should reply.
+- You spoke last turn and have nothing new to add.
+- The reply is requested from someone who is already Over (a fruitless round-trip).
+- You would only repeat the same point.
+- You want to save remaining utterances for the core topic.
+
+Otherwise speak as usual. Do speak when silence persists, when you were directly questioned, or when a CO needs immediate follow-up.
+{%- endif %}
 {% elif request_key == 'whisper' -%}
 {%- set ml = (setting.whisper.max_length if setting is not none and setting.whisper is not none and setting.whisper.max_length is not none else none) -%}
+{%- set _length_unit = 'the whisper inside ``「」``' if _narration_split else 'each whisper' -%}
 {% if ml is not none and ml.per_talk is not none -%}
-Keep each whisper within {{ ml.per_talk }} characters.
+Keep {{ _length_unit }} within {{ ml.per_talk }} characters.
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
-If you @-mention another agent (e.g. {{ mention_hint }}), you may extend your whisper by up to {{ ml.mention_length }} additional characters.
+If you @-mention another agent (e.g. {{ mention_hint }}), you may extend by up to {{ ml.mention_length }} additional characters.
 {% endif -%}
 {% elif ml is not none and ml.base_length is not none -%}
-Keep each whisper within {{ ml.base_length }} characters.
+Keep {{ _length_unit }} within {{ ml.base_length }} characters.
 {% if ml.mention_length is not none and ml.mention_length > 0 -%}
 If you @-mention another agent (e.g. {{ mention_hint }}), you may use up to {{ ml.mention_length }} additional characters (max {{ ml.base_length + ml.mention_length }} total).
 {% endif -%}
@@ -57,9 +102,25 @@ If you @-mention another agent (e.g. {{ mention_hint }}), you may use up to {{ m
 {% if info is not none and info.remain_length is not none -%}
 Remaining whisper budget for today: {{ info.remain_length }} characters.
 {% endif -%}
+{%- if _narration_split %}
+The whisper body MUST be wrapped in ``「...」``. Stage directions outside the quotes are allowed; only the quote contents are sent to the server. The cap applies only inside the quotes; stage directions do not count. Headings, tables, meta labels, ``Name: utterance`` structure, voiced other characters, and third-party narration must not appear inside or outside the quotes.
+Only when you truly have nothing more to whisper for the rest of today, output the literal control token ``「Over」`` by itself.
+{%- else %}
 Output only the whisper content. Do not include explanations, meta commentary, or preambles.
-Do NOT imitate the script's format: headings, tables, meta labels, and the `Name: utterance` script structure are meta elements handled by the server.
+Do NOT imitate the script's format: headings, tables, meta labels, and ``Name: utterance`` script structure are meta elements handled by the server.
 Only when you truly have nothing more to whisper for the rest of today, output the literal control token "Over" by itself.
+{%- endif %}
+{%- if _freeform %}
+
+[freeform mode: next-speaker decision]
+Considering the recent whisper flow, decide whether whispering now is natural for you. If any of the following holds, output exactly ``[PASS]``:
+- Another werewolf was just questioned -> wait for them.
+- You whispered last turn and have nothing new to add.
+- You would only repeat the same point.
+- You want to save remaining whispers for a more important topic.
+
+Otherwise whisper as usual.
+{%- endif %}
 {% elif request_key in ['divine', 'guard', 'vote', 'attack'] -%}
 Output only the target agent name. Do not add explanations, reasons, symbols, or prefixes.
 {% endif -%}

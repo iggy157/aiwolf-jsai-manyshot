@@ -1,221 +1,174 @@
-# aiwolf-jsai-agent
+# aiwolf-jsai-manyshot
 
 [README in English](/README.en.md)
 
-人狼知能コンテスト（自然言語部門）向けの LLM エージェント実装（JSAI 2026 版）。
+人狼知能コンテスト (自然言語部門) JSAI 2026 版の LLM エージェント実装。
+**お手本台本 (manyshot scenarios)** を LLM の「事前学習」コンテキストに焼き込んでから対局させる方式に特化したフォーク。
 
-- **multi-turn / single-turn モード** を config で切替
-- **LangChain 分離**: 発話系（talk/whisper）とアクション系（vote/divine/guard/attack）で別モデル・別 `llm_message_history` を使用可能
-- **プロンプトブロック**: `prompts/{jp,en}/*.jinja` を `{{ block('...') }}` で再利用（日英切替は config の `lang`）、ON/OFF と `markdown` / `xml` の見出し付与にも対応
-- **コストトレース**: 呼び出しごとに `log/<game>/cost_summary.{json,md}` をリアルタイム生成
+## 主な機能
 
-## 目次
-
-- [クイックスタート](#クイックスタート)
-- [設定ファイル構成](#設定ファイル構成)
-- [モード: multi-turn / single-turn](#モード-multi-turn--single-turn)
-- [LangChain 分離 (発話系 / アクション系)](#langchain-分離-発話系--アクション系)
-- [プロンプトブロック](#プロンプトブロック)
-- [コストトレース](#コストトレース)
-- [scripts/](#scripts)
-- [開発](#開発)
+- **Manyshot scenario priming** (`data/sample_games_md/`) — 実プレイログを Markdown で読ませて要約させ, 起動時に `(HumanMessage 台本, AIMessage 要約)` ペアを `llm_message_history` に積む。事前 prewarm でキャッシュするので INITIALIZE タイムアウトを回避できる。 → [doc/scenario_cache.md](doc/scenario_cache.md)
+- **Freeform turn-taking** (`agent.freeform`) — サーバが `TALK_PHASE_START/END` を送るグループチャット仕様に最適化。`[PASS]` 制御トークンと残り発話回数マップで自然な交代を実現。 → [doc/freeform.md](doc/freeform.md)
+- **Narration-split** (`prompt.narration_split`) — 発話を `「...」` で囲ませてト書きを外側に書かせ, サーバ送信前に `「」` 内側のみ抽出。物語性のある台本になる。 → [doc/narration_split.md](doc/narration_split.md)
+- **multi-turn / single-turn モード** — 会話履歴を LangChain で保持するか, 毎回フルコンテキストを埋め込むかを切替。
+- **LangChain 分離** — 発話系 (talk/whisper) とアクション系 (vote/divine/guard/attack) で別モデル・別履歴を使える。
+- **Anthropic prompt cache 自動注入** — Claude を使うとき OpenAI の自動キャッシュ相当の挙動を 1 行 (`anthropic.cache: true`) で。 → [doc/anthropic_cache.md](doc/anthropic_cache.md)
+- **プロフィール解決** (`profile.source: local`) — 台本登場人物名と同名のキャラクターを `data/prompts/profiles.<lang>.yml` から引いて identity に展開。
+- **コストトレース** — `log/<game>/cost_summary.{json,md}` をリアルタイム生成。OpenAI / Anthropic / Google の cached_input・thinking まで分離集計。 → [doc/cost.md](doc/cost.md)
 
 ## クイックスタート
 
-Python 3.11 以上 + [uv](https://docs.astral.sh/uv/) を推奨します。
+Python 3.11 以上 + [uv](https://docs.astral.sh/uv/) を推奨。
 
 ```bash
 # 1) リポジトリ取得
-git clone https://github.com/aiwolfdial/aiwolf-nlp-agent-llm.git aiwolf-jsai-agent
-cd aiwolf-jsai-agent
+git clone <repo-url> aiwolf-jsai-manyshot
+cd aiwolf-jsai-manyshot
 
 # 2) API キー用の .env をテンプレから作成 (編集は後述)
 cp config/.env.example config/.env
 
-# 3) 3分割configを example からコピー (メイン + multi_turn子 + single_turn子)
-#    英語プロンプトを使うなら .jp を .en に置き換える (メイン config の configs: セクションも .en.yml を参照済み)
+# 3) config を example からコピー
 cp config/config.main.jp.yml.example         config/config.main.jp.yml
 cp config/config.multi_turn.jp.yml.example   config/config.multi_turn.jp.yml
 cp config/config.single_turn.jp.yml.example  config/config.single_turn.jp.yml
 
 # 4) 依存インストール
 uv sync
+
+# 5) 台本キャッシュを事前生成 (LLM API を消費)
+#    config の scenario.delivery と agent.freeform に応じた cache が ./data/scenario_cache/ に書かれる
+uv run python scripts/prewarm_scenario.py
 ```
 
-`config/.env` に API キー（`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` のうち使うもの）を設定後、実行:
+`config/.env` に必要な API キー (`OPENAI_API_KEY` / `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` のうち使うもの) を設定後:
 
 ```bash
-# エージェントを起動 (既定で ./config/config.main.jp.yml を読み, モードに応じて子configを自動マージ)
+# エージェント起動 (既定で ./config/config.main.jp.yml を読み, モードに応じて子configを自動マージ)
 uv run python src/main.py
 
-# 英語プロンプトを使う場合は -c で明示指定
+# 英語プロンプトを使う場合
 uv run python src/main.py -c ./config/config.main.en.yml
 
-# 複数 config を並列実行する場合も -c を使う
+# 複数 config を並列実行 (rate limit 注意)
 uv run python src/main.py -c './config/*.main.*.yml'
 ```
 
-> `uv` を使わない場合: `python -m venv .venv && source .venv/bin/activate && pip install -e .` の後、`python src/main.py` で実行。
-
 ## 設定ファイル構成
 
-設定は 3 ファイルに分割されています。メイン config が子 config を参照する構造です。
+設定は **メイン config + モード別子 config** の 2 層構造。
 
 | ファイル | 役割 |
 |---|---|
-| `config/config.main.{jp,en}.yml` | モード (`mode: multi_turn` / `single_turn`)、WebSocket、agent、log 等の共通設定 |
-| `config/config.multi_turn.{jp,en}.yml` | multi-turn 時の LLM 設定・プロンプト定義 |
-| `config/config.single_turn.{jp,en}.yml` | single-turn 時の LLM 設定・プロンプト定義 |
+| `config/config.main.{jp,en}.yml` | mode (`multi_turn` / `single_turn`), web_socket, agent, log, profile, headings |
+| `config/config.multi_turn.{jp,en}.yml` | multi-turn 時の scenario / llm / prompt 定義 |
+| `config/config.single_turn.{jp,en}.yml` | single-turn 時の scenario / llm / prompt 定義 |
 
-メイン config の `configs:` セクションで子 config のパスを指定。`mode` に応じて対応する子 config がロード時にマージされます（キー衝突時は子 config 優先）。言語識別子 (`.jp` / `.en`) を残すことで日英両方のセットを同一ディレクトリに共存させられます。
+メイン config の `configs:` セクションで子 config のパスを指定。`mode` に応じて対応する子 config がロード時にマージされる (キー衝突時は子 config 優先)。
 
-```yaml
-# config.main.jp.yml (抜粋)
-mode: multi_turn
-configs:
-  multi_turn: ./config.multi_turn.jp.yml
-  single_turn: ./config.single_turn.jp.yml
-```
+### 主要フラグ早見表
+
+| フラグ | 場所 | 説明 |
+|---|---|---|
+| `mode` | main | `multi_turn` / `single_turn` |
+| `lang` | main | `jp` / `en` (prompts/<lang>/ 配下を選択) |
+| `headings.enabled` / `headings.style` | main | ブロック冒頭の見出し付与 (`markdown` / `xml`) |
+| `profile.source` | main | `server` (info.profile を使う) / `local` (profiles.yml から引く) |
+| `agent.num` | main | 5 / 9 / 13 (村サイズ) |
+| `agent.freeform` | main | グループチャット仕様向け挙動を有効化 |
+| `agent.kill_on_timeout` | main | アクションタイムアウト時にスレッドを強制停止 |
+| `scenario.enabled` | mode | manyshot 台本を読み込むか |
+| `scenario.delivery` | mode | `full` (1回でまとめてfeed) / `by_day` (day別) |
+| `scenario.ack_mode` | mode | `llm_summary` (要約 cache) / `static` (固定文) |
+| `scenario.use_cache` | mode | scenario_cache を使うか |
+| `scenario.on_cache_miss` | mode | `static` / `live` / `error` |
+| `scenario.prewarm.{talk,action}` | mode | prewarm 専用モデル指定 |
+| `llm.type` | mode | `openai` / `google` / `vertexai` / `ollama` / `anthropic` |
+| `llm.separate_langchain` | mode | talk/action 系統で LangChain 分離 |
+| `llm.{talk,action}.{type,model,...}` | mode | 系統別モデル指定 |
+| `anthropic.cache` | mode | Claude 用 prompt cache 自動注入 (default true) |
+| `anthropic.cache_ttl` | mode | `5m` / `1h` |
+| `prompt.narration_split` | mode | 発話を `「」` で囲ませて地の文を許可 |
+
+詳細は [doc/config_reference.md](doc/config_reference.md) を参照。
 
 ## モード: multi-turn / single-turn
 
 | モード | 特徴 | LLM への入力 |
 |---|---|---|
-| **multi-turn** | 会話履歴 (`llm_message_history`) を LangChain で保持 | 毎リクエスト、履歴全体を送信 |
-| **single-turn** | `llm_message_history` を使わず毎回フルコンテキストを埋め込み | `HumanMessage` 単発のみ |
+| **multi-turn** | 会話履歴 (`llm_message_history`) を LangChain で保持 | 毎リクエスト, 履歴全体を送信 |
+| **single-turn** | 履歴を使わず毎回フルコンテキストを埋め込み | `HumanMessage` 単発のみ |
 
 ### single-turn の動作
-- `initialize` / `daily_initialize` / `daily_finish` は **LLM に送信せず**、agent 内部 (`day_events`) にスナップショット保持
-- talk / whisper / divine 等の各リクエストで、`day_events` とフル `talk_history` / `whisper_history` をプロンプト本文に埋め込み
+- `initialize` / `daily_initialize` / `daily_finish` は **LLM に送信せず**, agent 内部 (`day_events`) にスナップショット保持
+- talk / whisper / divine 等の各リクエストで, `day_events` とフル `talk_history` / `whisper_history` をプロンプト本文に埋め込み
 
-モード切替はメイン config (`config.main.jp.yml` / `config.main.en.yml`) の `mode` フィールドを変更するだけです。
-
-## LangChain 分離 (発話系 / アクション系)
-
-子 config (`config.multi_turn.{jp,en}.yml` または `config.single_turn.{jp,en}.yml`) の `llm.separate_langchain` を `true` にすると、リクエスト種別ごとに LangChain インスタンスと `llm_message_history` を分離できます。
-
-```yaml
-llm:
-  type: openai               # separate_langchain=false 時の既定プロバイダ
-  sleep_time: 3
-  separate_langchain: true   # ← true で分離
-  talk:
-    type: openai             # talk / whisper はこちら
-    model: gpt-4o            # ← インライン上書き (openai: セクションの model を上書き)
-  action:
-    type: openai             # vote / divine / guard / attack はこちら
-    model: gpt-4o-mini       # ← 同じ会社 (openai) で talk と別モデルを指定可能
-```
-
-- **共通リクエスト** (`initialize` / `daily_initialize` / `daily_finish`) は両方のモデルに送信され、両系統の履歴に情報共有される
-- **発話系** (`talk` / `whisper`) は `llm.talk` の履歴のみ更新
-- **アクション系** (`vote` / `divine` / `guard` / `attack`) は `llm.action` の履歴のみ更新
-- `false` の場合は `llm.type` で指定した単一モデル・単一履歴で従来通り動作
-
-### インライン設定オーバーライド
-
-`llm.talk` / `llm.action` (および `separate_langchain=false` 時の `llm` 直下) には、`type` に加えて以下のフィールドを直接書くと、下の `<provider>:` セクションの値を上書きします。
-
-| キー | 用途 |
-|---|---|
-| `model` | 使うモデル ID (例: `gpt-4o` / `claude-opus-4-5-20251101`) |
-| `temperature` | 温度パラメータ |
-| `pricing_mode` | `standard` / `batch` など料金モード切替 |
-| `base_url` | ollama 用のエンドポイント URL |
-
-- 省略した項目は下の `<provider>:` セクションの値を継承します
-- `type` を省略すると `llm.type` がデフォルトとして使われます
-- **`api_key` は書けません**(書くと起動時にエラー)。API キーは `config/.env` の環境変数で指定してください
-- これにより「同じ会社の違うモデル」(talk=`openai`+`gpt-4o`、action=`openai`+`gpt-4o-mini` など)を talk / action に割り当てられます
+multi-turn では scenario_cache 機構が効くため, manyshot priming を活かしたい場合は multi-turn 推奨。single-turn は履歴肥大化に強い反面, 1 リクエストの prompt サイズが膨らむ。
 
 ## プロンプトブロック
 
-`prompts/jp/` と `prompts/en/` の配下にそれぞれ 5 つの再利用可能 Jinja2 ブロックがあります。メイン config の `lang: jp` / `lang: en` で参照先を切替えます。config の `prompt.<request>` からは `{{ block('<name>') }}` で参照してください。
+`prompts/jp/` と `prompts/en/` の配下に再利用可能 Jinja2 ブロック群がある。メイン config の `lang: jp` / `lang: en` で参照先を切替。子 config の `prompt.<request>` から `{{ block('<name>') }}` で参照する。
 
-| ブロック | 役割 | 主な変数 |
-|---|---|---|
-| `identity.jinja` | 名前・役職・プロフィール | `info.agent` / `role.value` / `info.profile` |
-| `history.jinja` | 発言履歴ループ（`history_source` / `history_start` で切替） | `talk_history` / `whisper_history` |
-| `event.jinja` | 日次イベント一覧（`day_events` 優先、無ければ `info`） | `day_events` / `info` |
-| `instruction.jinja` | リクエスト別の最低限の指示文 | `request_key` |
-| `constraints.jinja` | 出力形式と文字数制限（サーバ `setting` 参照） | `request_key` / `setting` |
+| ブロック | 役割 |
+|---|---|
+| `identity.jinja` | 名前・役職・プロフィール |
+| `history.jinja` | 発言履歴ループ (`history_source` / `history_start` で切替) |
+| `event.jinja` | 日次イベント一覧 (`day_events` 優先, 無ければ `info`) |
+| `instruction.jinja` | リクエスト別の最低限の指示文 |
+| `constraints.jinja` | 出力形式・文字数制限・freeform 用 [PASS] 指示 |
+| `scenario.jinja` | manyshot 台本フィードの HumanMessage 本文 (full delivery) |
+| `scenario_daily.jinja` | manyshot 台本フィード (by_day delivery, day 別) |
+| `scenario_system.jinja` | scenario フィード前に積む SystemMessage |
 
-使用例:
-
-```jinja
-{% set history_source = talk_history %}
-{% set history_start = sent_talk_count %}
-{{ block('history') }}
-{{ block('instruction') }}
-{{ block('constraints') }}
-```
-
-`block('<name>')` は `prompts/<lang>/<name>.jinja` を呼び出し側コンテキストでレンダした結果を返します（素の `{% include %}` と同等の挙動）。加えて後述の **見出し設定** が有効な場合は、本文冒頭に見出しを自動付与します。
-
-jp / en の両言語のブロックと config が揃っています。新しい言語を追加する場合は `prompts/<lang>/` と `config/config.<mode>.<lang>.yml.example` の両方を用意し、メイン config の `lang` と `configs:` の参照先も `<lang>` 付きに書き換えてください。
-
-### 見出しの自動付与（`headings`）
-
-メイン config の `headings` セクションで、各ブロックの冒頭に見出しを付けるかどうかを切替えられます。LLM から見たときにブロック境界を明示したい場面で有効です。
-
-```yaml
-# config.main.jp.yml（抜粋）
-headings:
-  enabled: false     # true にすると見出しを付与
-  style: markdown    # markdown | xml の2種
-```
-
-| style | 出力例（lang=jp） | 出力例（lang=en） |
-|---|---|---|
-| `markdown` | `### 履歴` に続けて本文 | `### history` に続けて本文 |
-| `xml` | `<履歴>` … 本文 … `</履歴>` | `<history>` … 本文 … `</history>` |
-
-- 見出し文字列は **ブロックのファイル名（`.jinja` の stem）** が基本。日本語見出しは `prompts/jp/_labels.yml` に定義（未登録のブロックはファイル名がそのまま使われます）
-- 英語側（`prompts/en/`）には `_labels.yml` を置いていないため、常にファイル名（例 `history`, `instruction`）が見出しになります
-- 新しいブロック `foo.jinja` を追加したら、必要なら `prompts/jp/_labels.yml` に `foo: ○○` と 1 行追記するだけでよく、Python 側の変更は不要です
-- `enabled: false`（既定）のときは従来どおり見出しなしで連結されます
-
-## コストトレース
-
-LLM 呼び出しごとに、`AIMessage.usage_metadata` からトークン使用量を抽出し `data/model_cost/*.csv` を参照して USD 換算。`log/<game>/cost_summary.json` に fcntl ロック付きでリアルタイム追記、ゲーム終了時に `cost_summary.md` を生成します。
-
-### 出力先
-
-`log/<YYYYMMDDHHmmssSSS>/` 配下（`agent_logger` と同じ命名規則）に以下が並びます。
-
-```
-log/20260418033529578/
-  kanolab1.log
-  kanolab2.log
-  ...
-  cost_summary.json    # 呼び出しごとに上書き
-  cost_summary.md      # finish時に生成
-```
-
-### 集計対象
-
-- **input / cached_input / output / thinking** トークンを分離して集計（OpenAI reasoning / Anthropic extended thinking / Google cached content に対応）
-- **multi-turn** の累積入力（履歴込みの `input_tokens`）も漏れなく計上
-- **プロバイダ別料金表**: `data/model_cost/openai.csv` / `anthropic.csv` / `google.csv`
-- 各プロバイダの `pricing_mode`（`standard` / `batch` 等）を config の `<provider>.pricing_mode` で切替可能（既定 `standard`）
-- `ollama` は無料計上、`models.csv` に無いモデルは警告 + `unknown_pricing` フラグ付与
-
-### 料金表の更新
-
-モデル追加時は該当プロバイダの CSV に行を追加し、`uv run python scripts/generate_models_md.py` で `data/models.md` を再生成してください。
+`block('<name>')` は `prompts/<lang>/<name>.jinja` を呼び出し側コンテキストでレンダした結果を返す (`{% include %}` 相当)。`headings.enabled: true` の場合は本文冒頭に見出しを自動付与。見出しテキストは `prompts/<lang>/_labels.yml` で定義。
 
 ## scripts/
 
 | Script | 説明 |
 |---|---|
-| `scripts/preview_prompt.py` | `data/sample_packet.yml` を読み、jp × {multi_turn, single_turn} + en × {multi_turn, single_turn} の計4ターゲット全リクエストをレンダリングして `preview.md` に上書き出力 |
-| `scripts/generate_models_md.py` | `data/model_cost/*.csv` から `data/models.md`（使用可能モデル一覧と料金）を生成 |
+| `scripts/prewarm_scenario.py` | manyshot 台本 → LLM 要約のキャッシュを事前生成 (`config.scenario.*` を読み実行) |
+| `scripts/preview_prompt.py` | `data/sample_packet.yml` を読み, jp/en × multi_turn/single_turn の全リクエストをレンダして `preview.md` に出力 |
+| `scripts/render_scenario_cache.py` | `data/scenario_cache/*.json` を `data/scenario_cache_readable/*.md` に人間可読変換 |
+| `scripts/convert_sample_games.py` | `data/sample_games/*.log` (CSV) を `data/sample_games_md/*.md` に変換 |
+| `scripts/migrate_turn_observation.py` | (一時) talk-side cache に "Turn 進行と投票宣言" 補足を append (Phase 1 実験用) |
 
-実行:
+実行例:
 
 ```bash
-uv run python scripts/preview_prompt.py       # preview.md を再生成
-uv run python scripts/generate_models_md.py   # data/models.md を再生成
+uv run python scripts/prewarm_scenario.py                    # 既定 config で prewarm
+uv run python scripts/prewarm_scenario.py --agent-num 9      # 9人村用に prewarm (5人とは別ディレクトリ)
+uv run python scripts/prewarm_scenario.py --force            # 既存 cache を無視して再生成
+uv run python scripts/preview_prompt.py                      # preview.md を再生成
+uv run python scripts/render_scenario_cache.py               # readable .md を再生成
+```
+
+## ディレクトリ構成
+
+```
+aiwolf-jsai-manyshot/
+├── config/                            # 設定ファイル (.example 同梱)
+├── data/
+│   ├── model_cost/                    # プロバイダ別料金 CSV
+│   ├── prompts/profiles.{jp,en}.yml   # ローカルプロフィール辞書
+│   ├── sample_games/sample_games_<N>/ # オリジナル CSV ログ
+│   ├── sample_games_md/sample_games_<N>/  # MD 変換版 (manyshot ソース)
+│   ├── scenario_cache/                # prewarm キャッシュ (4種: 5p/5p_freeform/9p/9p_freeform)
+│   ├── scenario_cache_readable/       # 上記の人間可読 MD 版
+│   └── sample_packet.yml              # preview 用サンプル
+├── doc/                               # 機能別詳細ドキュメント
+├── prompts/
+│   ├── jp/  (8 ブロック + _labels.yml)
+│   └── en/  (8 ブロック + _labels.yml)
+├── scripts/                           # ユーティリティ
+├── src/
+│   ├── agent/                         # Agent 実装 (役職別含む)
+│   ├── utils/                         # 各種ヘルパ (jinja_env / scenario_cache /
+│   │                                  #   anthropic_cache / cost_utils 等)
+│   ├── main.py                        # エントリポイント
+│   └── starter.py                     # ゲームセッションループ
+├── preview.md                         # (生成物) プロンプトプレビュー
+├── pyproject.toml
+└── README.md
 ```
 
 ## 開発
@@ -224,34 +177,11 @@ uv run python scripts/generate_models_md.py   # data/models.md を再生成
 uv run ruff check .     # lint
 uv run ruff format .    # format
 uv run pyright          # 型チェック (strict)
+uv run python scripts/preview_prompt.py   # プロンプト変更後の確認
 ```
 
-### ディレクトリ構成
+## 参考リンク
 
-```
-aiwolf-jsai-agent/
-├── config/                       # 設定ファイル (example)
-├── data/
-│   ├── model_cost/               # プロバイダ別料金 CSV
-│   ├── models.md                 # 自動生成されたモデル一覧
-│   └── sample_packet.yml         # preview 用サンプル
-├── prompts/
-│   ├── jp/                       # Jinja2 ブロック 日本語 (5ファイル + _labels.yml)
-│   └── en/                       # Jinja2 ブロック 英語 (5ファイル)
-├── scripts/                      # ユーティリティスクリプト
-├── src/
-│   ├── agent/                    # Agent 実装 (役職別含む)
-│   ├── utils/
-│   │   ├── agent_logger.py       # ゲーム別ログ出力
-│   │   ├── cost_utils.py         # 料金テーブル読込・コスト計算
-│   │   ├── cost_logger.py        # cost_summary.{json,md} 書込
-│   │   └── ...
-│   ├── main.py
-│   └── starter.py
-└── preview.md                    # (自動生成)
-```
-
-## 参考
-
-- [aiwolf-nlp-agent](https://github.com/aiwolfdial/aiwolf-nlp-agent) — リファレンス実装（プロトコル詳細など）
+- [aiwolf-nlp-agent](https://github.com/aiwolfdial/aiwolf-nlp-agent) — リファレンス実装
 - [aiwolf-nlp-server](https://github.com/aiwolfdial/aiwolf-nlp-server) — ゲームサーバ
+- [aiwolf-nlp-common](https://github.com/aiwolfdial/aiwolf-nlp-common) — 共通ライブラリ (パケット定義等)

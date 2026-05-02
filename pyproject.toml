@@ -1,6 +1,6 @@
 [project]
-name = "aiwolf-nlp-agent-llm"
-version = "0.3.6"
+name = "aiwolf-jsai-manyshot"
+version = "0.4.0"
 dependencies = [
     "aiwolf-nlp-common==0.7.0",
     "python-ulid>=3.0.0",
@@ -23,10 +23,10 @@ maintainers = [
     { name = "nwatanabe", email = "nwatanabe@kanolab.net" },
     { name = "ysahashi", email = "ysahashi@kanolab.net" },
 ]
-description = "aiwolf-nlp-agent-llm"
+description = "AIWolf NLP (JSAI 2026) LLM agent with manyshot scenario priming, freeform turn-taking, and narration-split mode"
 readme = "README.md"
 license = { file = "LICENSE" }
-keywords = ["aiwolf"]
+keywords = ["aiwolf", "werewolf", "llm", "manyshot", "agent"]
 
 [project.urls]
 Homepage = "https://aiwolfdial.github.io/aiwolf-nlp/"

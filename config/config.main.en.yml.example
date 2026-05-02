@@ -43,6 +43,17 @@ agent:
   num: 5
   team: kanolab
   kill_on_timeout: true
+  # Whether to enable behavior tuned for the freeform (group-chat) server protocol
+  # where the server sends TALK_PHASE_START / TALK_PHASE_END packets.
+  #   true: scenario cache is loaded from ``sample_games_<num>_freeform/``. The analysis prompt
+  #         includes "next-speaker selection" and "talk-budget-aware behavior" observations.
+  #         The constraints prompt shows a ``[PASS]`` control token instruction and the
+  #         per-agent remain_talk_map. handle_talk_phase / handle_whisper_phase add a 0–3s
+  #         initial stagger and detect ``[PASS]`` to skip the send.
+  #   false (default): legacy behavior (always talk on each tick; cache from ``sample_games_<num>/``).
+  #         Use this when the server is request/response, or as a safe fallback when accidentally
+  #         connecting to a freeform server.
+  freeform: false
 
 log:
   console_output: true
